@@ -1,54 +1,23 @@
 import 'dotenv/config';
 import path from 'node:path';
 import { createApp } from './app';
+import { readRuntimeOptions } from './config';
 const host = process.env.HOST || '127.0.0.1';
-const password = process.env.APP_PASSWORD;
-const accountMode = process.env.AUTH_MODE === 'accounts';
-if (process.env.AUTH_MODE && !['local', 'shared', 'accounts'].includes(process.env.AUTH_MODE))
-  throw new Error('AUTH_MODE 必须为 local、shared 或 accounts');
-if (process.env.AUTH_MODE === 'local' && password)
-  throw new Error('local 模式不能同时设置 APP_PASSWORD，请明确选择访问方式');
-if (process.env.AUTH_MODE === 'shared' && (!password || password.length < 16))
-  throw new Error('shared 模式需要至少 16 字符的 APP_PASSWORD');
+const options = readRuntimeOptions('api');
+const workerMode = process.env.WORKER_MODE || 'inline';
+if (!['inline', 'external'].includes(workerMode))
+  throw new Error('WORKER_MODE 必须是 inline 或 external');
+if (workerMode === 'external' && (!options.databaseUrl || !options.encryptionKey))
+  throw new Error('外置 worker 模式需要 DATABASE_URL 和 ENCRYPTION_KEY');
 if (
   !['127.0.0.1', 'localhost', '::1'].includes(host) &&
-  (!process.env.APP_ORIGIN || (!accountMode && (!password || password.length < 16)))
+  (!process.env.APP_ORIGIN ||
+    (!options.accounts && (!options.password || options.password.length < 16)))
 )
-  throw new Error(
-    '非本地监听需要 APP_ORIGIN，并启用 accounts 模式或配置至少 16 字符的 APP_PASSWORD',
-  );
-const storage =
-  process.env.STORAGE_BACKEND === 's3'
-    ? {
-        endpoint: process.env.S3_ENDPOINT || '',
-        region: process.env.S3_REGION || '',
-        bucket: process.env.S3_BUCKET || '',
-        accessKeyId: process.env.S3_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || '',
-        prefix: process.env.S3_PREFIX || undefined,
-        forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== 'false',
-      }
-    : undefined;
-if (process.env.STORAGE_BACKEND && !['local', 's3'].includes(process.env.STORAGE_BACKEND))
-  throw new Error('STORAGE_BACKEND 必须为 local 或 s3');
+  throw new Error('非本地监听需要 APP_ORIGIN，以及账号模式或至少16字符共享密码');
 const { app } = await createApp({
-  dataDir: path.resolve(process.env.DATA_DIR || '.data'),
-  databaseUrl: process.env.DATABASE_URL,
-  encryptionKey: process.env.ENCRYPTION_KEY,
-  password: accountMode ? undefined : password,
-  accounts: accountMode
-    ? {
-        bootstrap:
-          process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD
-            ? {
-                email: process.env.ADMIN_EMAIL,
-                password: process.env.ADMIN_PASSWORD,
-                displayName: process.env.ADMIN_NAME || '管理员',
-              }
-            : undefined,
-      }
-    : undefined,
-  storage,
+  ...options,
+  worker: workerMode === 'inline',
   origin: process.env.APP_ORIGIN,
   staticRoot: path.resolve('dist/web'),
 });
@@ -58,7 +27,7 @@ try {
   await app.close();
   throw error;
 }
-console.log(`织作 API 已启动：http://${host}:${process.env.PORT || 4317}`);
+console.log(`织作 API 已启动：http://${host}:${process.env.PORT || 4317}（worker: ${workerMode}）`);
 for (const signal of ['SIGINT', 'SIGTERM'] as const)
   process.once(signal, () => {
     void app.close().then(() => process.exit(0));

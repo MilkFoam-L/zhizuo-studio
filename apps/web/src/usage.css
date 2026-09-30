@@ -1,0 +1,502 @@
+.usage-page {
+  padding-bottom: 44px;
+  font-size: 14px;
+}
+
+.usage-page .workspace-status,
+.usage-panel-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.usage-page .button,
+.usage-edit-form .button,
+.usage-field input,
+.usage-field select {
+  min-height: 44px;
+  font-size: 14px;
+}
+
+.usage-workspace-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px 24px;
+  margin: 28px 0 24px;
+}
+
+.usage-workspace-control > .usage-field {
+  flex: 0 1 360px;
+  max-width: 100%;
+}
+
+.usage-workspace-control > p {
+  flex: 1 1 240px;
+  padding-bottom: 8px;
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+
+.usage-workspace-control .error-box {
+  flex-basis: 100%;
+}
+
+.usage-field {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.usage-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 34px 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--surface);
+  color: var(--foreground);
+}
+
+.usage-field select:disabled {
+  opacity: 0.7;
+}
+
+.usage-overview[data-slot='card'] {
+  gap: 0;
+  padding: 28px;
+  margin-top: 24px;
+  box-shadow: none;
+}
+
+.usage-overview-heading,
+.usage-panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.usage-overview-heading h2 {
+  overflow-wrap: anywhere;
+  font-size: 18px;
+}
+
+.usage-overview-heading p,
+.usage-overview-note,
+.usage-panel-heading p,
+.usage-field p,
+.usage-review-task p {
+  margin-top: 5px;
+  color: var(--muted-foreground);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.usage-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+  margin: 30px 0 24px;
+}
+
+.usage-metrics dt {
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+
+.usage-metrics dd {
+  margin: 7px 0 0;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.usage-metrics dd span {
+  margin-left: 8px;
+  color: var(--muted-foreground);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.usage-metric-primary dd {
+  color: var(--forest);
+}
+
+.usage-meter {
+  appearance: none;
+  display: block;
+  width: 100%;
+  border: 0;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--muted);
+}
+
+.usage-meter::-webkit-meter-bar {
+  background: var(--muted);
+  border: 0;
+  border-radius: 8px;
+}
+.usage-meter::-webkit-meter-optimum-value {
+  background: var(--forest);
+  border-radius: 8px;
+}
+.usage-meter::-moz-meter-bar {
+  background: var(--forest);
+  border-radius: 8px;
+}
+
+.usage-overview-note {
+  margin-top: 14px;
+}
+
+.usage-billing-note,
+.usage-member-review {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px;
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+
+.usage-billing-note > svg,
+.usage-member-review > svg {
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
+.usage-billing-note strong {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.usage-panel[data-slot='card'] {
+  gap: 0;
+  padding: 0;
+  margin-bottom: 24px;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.usage-panel-heading {
+  padding: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-panel-heading h2 {
+  font-size: 18px;
+}
+
+.usage-review-count {
+  min-width: 26px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-empty {
+  display: flex;
+  min-height: 180px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 30px 24px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.usage-empty p {
+  font-size: 14px;
+}
+
+.usage-empty .error-box {
+  text-align: left;
+}
+
+.usage-panel-message {
+  padding: 20px 24px 0;
+}
+
+.usage-table {
+  min-width: 620px;
+}
+
+.usage-table [data-slot='table-head'],
+.usage-table [data-slot='table-cell'] {
+  padding: 16px 24px;
+  font-size: 14px;
+}
+
+.usage-table [data-slot='table-head'] {
+  color: var(--muted-foreground);
+  background: var(--cream);
+  font-weight: 500;
+}
+
+.usage-task-id {
+  display: block;
+  max-width: 290px;
+  font-size: 12px;
+  line-height: 1.8;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.usage-action-cell {
+  text-align: right;
+}
+
+.usage-state {
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.usage-state-reserved {
+  color: #59657b;
+  background: #eff2f6;
+}
+
+.usage-state-consumed {
+  color: var(--forest);
+  background: var(--muted);
+}
+
+.usage-state-released {
+  color: var(--muted-foreground);
+  background: var(--cream);
+}
+
+.usage-state-review {
+  color: #826027;
+  background: #fcf5e5;
+  border-color: #ecdeba;
+}
+
+.usage-list-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+
+.usage-events {
+  list-style: none;
+  margin: 0;
+  padding: 0 24px;
+}
+
+.usage-events > li {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 14px;
+  padding: 20px 0;
+}
+
+.usage-events > li + li {
+  border-top: 1px solid var(--border);
+}
+
+.usage-event-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 8px;
+  border-radius: 50%;
+  background: #9aa995;
+}
+
+.usage-event-title {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  line-height: 1.8;
+}
+
+.usage-event-title strong {
+  font-weight: 500;
+}
+
+.usage-event-title time,
+.usage-event-meta {
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.usage-event-reason {
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.usage-event-limit {
+  margin-top: 6px;
+  color: var(--forest);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 8px;
+}
+
+.usage-edit-form {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.usage-edit-form textarea {
+  resize: vertical;
+  min-height: 96px;
+  font-size: 14px;
+}
+
+.usage-review-task {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--cream);
+}
+
+.usage-resolution-options {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.usage-resolution-options legend {
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.usage-resolution-options > label {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 44px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.usage-resolution-options > label:has(input:checked) {
+  border-color: var(--forest);
+  background: var(--muted);
+}
+
+.usage-resolution-options input {
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  flex-shrink: 0;
+  accent-color: var(--forest);
+}
+
+.usage-resolution-options label > span {
+  display: grid;
+  gap: 6px;
+  line-height: 1.7;
+}
+
+.usage-resolution-options strong {
+  font-weight: 500;
+}
+
+.usage-resolution-options label > span > span {
+  color: var(--muted-foreground);
+}
+
+.usage-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+@media (max-width: 1100px) {
+  .usage-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .usage-page {
+    padding-bottom: 28px;
+  }
+
+  .usage-page .page-heading > .button {
+    width: auto;
+    height: 44px;
+    padding: 0 16px;
+    font-size: 14px;
+  }
+
+  .usage-overview[data-slot='card'],
+  .usage-panel-heading {
+    padding: 20px;
+  }
+
+  .usage-workspace-control {
+    gap: 10px;
+  }
+
+  .usage-workspace-control > .usage-field {
+    flex-basis: 100%;
+  }
+
+  .usage-billing-note {
+    padding-inline: 4px;
+  }
+
+  .usage-metrics dd {
+    font-size: 28px;
+  }
+
+  .usage-form-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .usage-form-actions > button[type='submit'] {
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 460px) {
+  .sidebar.sidebar-with-accounts {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 76px;
+    padding-block: 14px;
+    gap: 12px;
+  }
+
+  .sidebar.sidebar-with-accounts nav {
+    width: 100%;
+    justify-content: space-between;
+    margin-left: 0;
+  }
+}

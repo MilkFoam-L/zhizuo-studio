@@ -1,10 +1,10 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { AccountService, type PublicAccount } from './accounts';
-import { createStorage, type S3StorageConfig } from './storage';
+import { createRuntime, type RuntimeOptions } from './runtime';
 import multipart from '@fastify/multipart';
 import cookie from '@fastify/cookie';
 import staticFiles from '@fastify/static';
-import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
@@ -12,32 +12,16 @@ import { zipSync, strToU8 } from 'fflate';
 import type { Asset, ContentVersion, Project } from '../../../packages/shared/src/index';
 import { EMPTY_BRIEF, makePoster, TEMPLATES } from '../../../packages/shared/src/index';
 import { contentWarnings, layoutPoster } from '../../../packages/shared/src/poster-layout';
-import { openDatabase } from './db';
-import { Repository, NotFound, now } from './repository';
-import { Media } from './media';
-import {
-  JobRunner,
-  publicTask,
-  publicProvider,
-  type StoredProvider,
-  type StoredTask,
-  type JobExecution,
-} from './jobs';
+import { NotFound, now } from './repository';
+import { publicTask, publicProvider, type StoredProvider, type StoredTask } from './jobs';
 import { validateProviderInput, encryptSecret, decryptSecret, testConnection } from './providers';
 import { boardSchema, briefSchema, copySchema, posterSchema } from './validation';
 import { backup, restore } from './backup';
 
-export interface AppOptions {
-  dataDir: string;
-  databaseUrl?: string;
-  encryptionKey?: string;
-  password?: string;
+export interface AppOptions extends RuntimeOptions {
   origin?: string;
   worker?: boolean;
   staticRoot?: string;
-  accounts?: { bootstrap?: { email: string; password: string; displayName?: string } };
-  storage?: S3StorageConfig;
-  execution?: Omit<JobExecution, 'canRunProject'>;
 }
 const idSchema = z.string().uuid();
 const hash = (v: string) => createHash('sha256').update(v).digest();
@@ -46,33 +30,8 @@ const plainProvider = (p: StoredProvider) => {
   return config;
 };
 export async function createApp(options: AppOptions) {
-  await mkdir(options.dataDir, { recursive: true, mode: 0o700 });
-  let key = options.encryptionKey;
-  if (!key) {
-    const f = path.join(options.dataDir, 'encryption.key');
-    try {
-      key = await readFile(f, 'utf8');
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-      key = randomBytes(32).toString('hex');
-      await writeFile(f, key, { mode: 0o600, flag: 'wx' });
-    }
-  }
-  if (!/^[a-f0-9]{64}$/i.test(key)) throw new Error('ENCRYPTION_KEY 必须为 64 位十六进制字符串');
-  const db = await openDatabase(options.dataDir, options.databaseUrl);
-  const repo = new Repository(db);
-  const blobStorage = createStorage(options.dataDir, options.storage);
-  const media = new Media(db, options.dataDir, blobStorage);
-  const accounts = options.accounts ? new AccountService(db) : undefined;
-  if (accounts) {
-    await accounts.initialize(options.accounts?.bootstrap);
-    if (!(await accounts.listAccounts()).length) {
-      await db.close();
-      throw new Error('首次启用账号模式需要配置 ADMIN_EMAIL 和 ADMIN_PASSWORD');
-    }
-    await db.query('INSERT INTO migrations(version) VALUES(2) ON CONFLICT DO NOTHING');
-  }
-  const mode = accounts ? 'accounts' : options.password ? 'shared' : 'local';
+  const runtime = await createRuntime(options);
+  const { db, repo, media, runner, accounts, quotas, mode, key } = runtime;
   const identities = new WeakMap<FastifyRequest, PublicAccount>();
   const workspace = (req: FastifyRequest) => identities.get(req)?.workspace.id ?? 'local';
   const ownedProject = async (req: FastifyRequest, id: string) => {
@@ -93,22 +52,6 @@ export async function createApp(options: AppOptions) {
         [workspace(req)],
       )
       .then((rows) => rows.map((row) => row.body));
-  const canRunProject = async (projectId: string) => {
-    const project = await db.get<Project>('projects', projectId);
-    if (!project) return false;
-    const owner = project.workspaceId ?? 'local';
-    if (!accounts) return owner === 'local';
-    if (owner === 'local') return false;
-    return (
-      (
-        await db.query(
-          'SELECT 1 FROM auth_workspaces w JOIN auth_users u ON u.id=w.owner_id WHERE w.id=$1 AND NOT u.disabled',
-          [owner],
-        )
-      ).length > 0
-    );
-  };
-  const runner = new JobRunner(db, repo, media, key, { ...options.execution, canRunProject });
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 });
   await app.register(cookie);
   await app.register(multipart, { limits: { fileSize: 100 * 1024 * 1024, files: 1, fields: 5 } });
@@ -124,22 +67,12 @@ export async function createApp(options: AppOptions) {
       if (loginLocks.get(ip) === pending) loginLocks.delete(ip);
     }
   };
-  const maxDaily = Number(process.env.MAX_DAILY_TASKS || 100);
-  if (!Number.isSafeInteger(maxDaily) || maxDaily < 1)
-    throw new Error('MAX_DAILY_TASKS 必须是正整数');
   let taskCreationTail: Promise<unknown> = Promise.resolve();
   function serializeTaskCreation<T>(fn: () => Promise<T>): Promise<T> {
     const next = taskCreationTail.then(fn, fn);
     taskCreationTail = next.catch(() => {});
     return next;
   }
-  const day = (iso: string) =>
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Shanghai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date(iso));
   const getId = (req: { params: unknown }, name = 'id') =>
     idSchema.parse((req.params as Record<string, unknown>)[name]);
   const isAuthenticated = async (token?: string) => {
@@ -212,7 +145,11 @@ export async function createApp(options: AppOptions) {
       if (!['/api/session', '/api/health'].includes(route)) {
         if (accounts ? !identities.has(req) : !(await isAuthenticated(req.cookies.zhizuo_session)))
           return reply.code(401).send({ error: '请先登录工作台' });
-        if (route.startsWith('/api/admin/') && identities.get(req)?.role !== 'admin')
+        if (
+          route.startsWith('/api/admin/') &&
+          identities.get(req)?.role !== 'admin' &&
+          !(mode !== 'accounts' && route.startsWith('/api/admin/quota'))
+        )
           return reply.code(403).send({ error: '需要管理员权限' });
         if (route.startsWith('/api/projects/:id')) await ownedProject(req, getId(req));
         else if (route.startsWith('/api/providers/:id')) await ownedProvider(req, getId(req));
@@ -247,6 +184,7 @@ export async function createApp(options: AppOptions) {
     storage: options.databaseUrl ? 'postgresql' : 'pglite',
     mode: accounts ? 'accounts' : options.password ? 'private-hosted' : 'local',
     mediaStorage: options.storage ? 's3' : 'local',
+    workerMode: options.worker === false ? 'external-or-disabled' : 'inline',
   }));
   app.get('/api/session', async (req) => ({
     authenticated: accounts
@@ -476,73 +414,68 @@ export async function createApp(options: AppOptions) {
     return reply.type('image/webp').send(await media.thumbnail(id));
   });
   app.post('/api/projects/:id/tasks', async (req, reply) =>
-    serializeTaskCreation(async () => {
-      await revalidateActor(req);
-      const id = getId(req);
-      const project = await repo.project(id);
-      const b = z
-        .object({
-          kind: z.enum(['copy', 'image']),
-          providerId: z.string().uuid(),
-          prompt: z.string().max(12000),
-          referenceAssetId: z.string().uuid().optional(),
-          parentVersionId: z.string().uuid().optional(),
-          idempotencyKey: z.string().min(8).max(128),
-        })
-        .parse(req.body);
-      if (!project.brief.confirmed || !project.brief.productName.trim())
-        throw new Error('请先填写商品名称，并确认简报中的商品事实');
-      if (b.kind === 'image' && !b.prompt.trim()) throw new Error('请填写图片生成需求');
-      const taskId = createHash('sha256')
-        .update(id + ':' + b.idempotencyKey)
-        .digest('hex');
-      // UUID-shaped stable key, scoped to project. Duplicate requests return the original task.
-      const idStable = `${taskId.slice(0, 8)}-${taskId.slice(8, 12)}-4${taskId.slice(13, 16)}-a${taskId.slice(17, 20)}-${taskId.slice(20, 32)}`;
-      const old = await db.get<StoredTask>('tasks', idStable);
-      if (old) return publicTask(old);
-      const workspaceProjects = new Set((await projectsFor(req)).map((p) => p.id));
-      const tasks = await db.list<StoredTask>('tasks');
-      if (
-        tasks.filter((t) => workspaceProjects.has(t.projectId) && day(t.createdAt) === day(now()))
-          .length >= maxDaily
-      )
-        return reply
-          .code(429)
-          .send({ error: '今日任务数量已达上限，请明天再试或由管理员调整限额' });
-      const provider = await ownedProvider(req, b.providerId);
-      if (
-        (b.kind === 'copy' && !provider.textModel) ||
-        (b.kind === 'image' && !provider.imageModel)
-      )
-        throw new Error('服务商没有配置对应模型');
-      if (b.referenceAssetId) await media.owned(b.referenceAssetId, id);
-      if (
-        b.parentVersionId &&
-        (await db.get<ContentVersion>('versions', b.parentVersionId))?.projectId !== id
-      )
-        throw new Error('父版本不存在于当前项目');
-      const t: StoredTask = {
-        id: idStable,
-        projectId: id,
-        providerId: provider.id,
-        kind: b.kind,
-        prompt: b.prompt,
-        referenceAssetId: b.referenceAssetId,
-        parentVersionId: b.parentVersionId,
-        status: 'queued',
-        attempts: 0,
-        createdAt: now(),
-        updatedAt: now(),
-        brief: structuredClone(project.brief),
-        config: plainProvider(provider),
-        secret: provider.secret,
-      };
-      const inserted = await db.query(
-        `INSERT INTO documents(scope,id,body) VALUES('tasks',$1,$2::jsonb) ON CONFLICT DO NOTHING RETURNING id`,
-        [t.id, JSON.stringify(t)],
-      );
-      return publicTask(inserted.length ? t : (await db.get<StoredTask>('tasks', t.id))!);
-    }),
+    serializeTaskCreation(() =>
+      db.transaction(async () => {
+        await revalidateActor(req);
+        const id = getId(req);
+        const project = await repo.project(id);
+        const b = z
+          .object({
+            kind: z.enum(['copy', 'image']),
+            providerId: z.string().uuid(),
+            prompt: z.string().max(12000),
+            referenceAssetId: z.string().uuid().optional(),
+            parentVersionId: z.string().uuid().optional(),
+            idempotencyKey: z.string().min(8).max(128),
+          })
+          .parse(req.body);
+        if (!project.brief.confirmed || !project.brief.productName.trim())
+          throw new Error('请先填写商品名称，并确认简报中的商品事实');
+        if (b.kind === 'image' && !b.prompt.trim()) throw new Error('请填写图片生成需求');
+        const taskId = createHash('sha256')
+          .update(id + ':' + b.idempotencyKey)
+          .digest('hex');
+        // UUID-shaped stable key, scoped to project. Duplicate requests return the original task.
+        const idStable = `${taskId.slice(0, 8)}-${taskId.slice(8, 12)}-4${taskId.slice(13, 16)}-a${taskId.slice(17, 20)}-${taskId.slice(20, 32)}`;
+        const old = await db.get<StoredTask>('tasks', idStable);
+        if (old) return publicTask(old);
+        const provider = await ownedProvider(req, b.providerId);
+        if (
+          (b.kind === 'copy' && !provider.textModel) ||
+          (b.kind === 'image' && !provider.imageModel)
+        )
+          throw new Error('服务商没有配置对应模型');
+        if (b.referenceAssetId) await media.owned(b.referenceAssetId, id);
+        if (
+          b.parentVersionId &&
+          (await db.get<ContentVersion>('versions', b.parentVersionId))?.projectId !== id
+        )
+          throw new Error('父版本不存在于当前项目');
+        const t: StoredTask = {
+          id: idStable,
+          projectId: id,
+          providerId: provider.id,
+          kind: b.kind,
+          prompt: b.prompt,
+          referenceAssetId: b.referenceAssetId,
+          parentVersionId: b.parentVersionId,
+          status: 'queued',
+          submissionStarted: false,
+          attempts: 0,
+          createdAt: now(),
+          updatedAt: now(),
+          brief: structuredClone(project.brief),
+          config: plainProvider(provider),
+          secret: provider.secret,
+        };
+        await quotas.reserve(t.id, workspace(req));
+        const inserted = await db.query(
+          `INSERT INTO documents(scope,id,body) VALUES('tasks',$1,$2::jsonb) ON CONFLICT DO NOTHING RETURNING id`,
+          [t.id, JSON.stringify(t)],
+        );
+        return publicTask(inserted.length ? t : (await db.get<StoredTask>('tasks', t.id))!);
+      }),
+    ),
   );
   app.get('/api/projects/:id/tasks', async (req) => {
     await repo.project(getId(req));
@@ -695,11 +628,102 @@ export async function createApp(options: AppOptions) {
     if (!file) throw new Error('请选择织作项目 ZIP 备份');
     return restore(repo, media, await file.toBuffer(), workspace(req));
   });
+  const quotaWorkspace = async (req: FastifyRequest) => {
+    const id = z
+      .union([z.literal('local'), z.string().uuid()])
+      .parse((req.params as { id: string }).id);
+    if (mode !== 'accounts') {
+      if (id !== 'local') throw new NotFound('工作空间不存在');
+      return id;
+    }
+    if (!(await db.query('SELECT id FROM auth_workspaces WHERE id=$1', [id])).length)
+      throw new NotFound('工作空间不存在');
+    return id;
+  };
+  const operator = (req: FastifyRequest) => identities.get(req)?.id ?? 'local-operator';
+  app.get('/api/admin/quota-workspaces', async () =>
+    accounts
+      ? (await accounts.listAccounts()).map((u) => ({
+          id: u.workspace.id,
+          name: u.workspace.name + (u.disabled ? '（已停用）' : ''),
+          email: u.email,
+        }))
+      : [{ id: 'local', name: '本地工作空间' }],
+  );
+  app.get('/api/admin/quotas/:id', async (req) => quotas.summary(await quotaWorkspace(req)));
+  app.patch('/api/admin/quotas/:id', async (req) => {
+    await revalidateActor(req, mode === 'accounts');
+    const b = z
+      .object({
+        limit: z.number().int().min(0).max(1_000_000),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .parse(req.body);
+    return quotas.setLimit(await quotaWorkspace(req), b.limit, b.reason, operator(req));
+  });
+  app.get('/api/admin/quotas/:id/reviews', async (req) => {
+    const b = z
+      .object({
+        cursor: z.string().max(2000).optional(),
+        limit: z.coerce.number().int().min(1).max(100).optional(),
+      })
+      .parse(req.query);
+    return quotas.reviewRecords(await quotaWorkspace(req), b);
+  });
+  app.post('/api/admin/quotas/:id/resolve', async (req) => {
+    await revalidateActor(req, mode === 'accounts');
+    const workspaceId = await quotaWorkspace(req);
+    const b = z
+      .object({
+        taskId: z.string().uuid(),
+        action: z.enum(['consume', 'release']),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .parse(req.body);
+    await db.transaction(async () => {
+      const [row] = await db.query<{ body: StoredTask; active: boolean }>(
+        `SELECT body,
+        COALESCE((body->>'leaseExpiresAt')::timestamptz > clock_timestamp(),false) AS active
+        FROM documents WHERE scope='tasks' AND id=$1 FOR UPDATE`,
+        [b.taskId],
+      );
+      if (!row) throw new NotFound('任务不存在');
+      const project = await repo.project(row.body.projectId);
+      if ((project.workspaceId ?? 'local') !== workspaceId) throw new NotFound('任务不存在');
+      if (['queued', 'running'].includes(row.body.status) || row.active) {
+        const e = new Error('任务仍在排队、运行或占用执行租约，请先停止任务后刷新核对') as Error & {
+          statusCode: number;
+        };
+        e.statusCode = 409;
+        throw e;
+      }
+      if (row.body.status === 'succeeded' && b.action === 'release') {
+        const e = new Error('任务已成功完成，请结算该任务或单独调整空间额度') as Error & {
+          statusCode: number;
+        };
+        e.statusCode = 409;
+        throw e;
+      }
+      await quotas.settle(row.body);
+      await quotas.resolve(b.taskId, b.action, b.reason, operator(req));
+      if (row.body.status === 'reconciling')
+        await db.put('tasks', b.taskId, {
+          ...row.body,
+          status: 'cancelled',
+          recoveryStopped: true,
+          error: '已人工核对任务额度，自动查询已停止；供应商实际结果与费用以其记录为准。',
+          updatedAt: now(),
+        });
+    });
+    return quotas.summary(workspaceId);
+  });
   app.get('/api/usage', async (req) => {
     const ids = new Set((await projectsFor(req)).map((p) => p.id));
+    const quota = await quotas.summary(workspace(req));
     return {
-      dailyLimit: maxDaily,
+      dailyLimit: quota.limit,
       records: (await db.list<{ projectId: string }>('usage')).filter((r) => ids.has(r.projectId)),
+      quota,
     };
   });
   if (options.staticRoot) {
@@ -715,32 +739,8 @@ export async function createApp(options: AppOptions) {
       /* Development server serves the web app. */
     }
   }
-  let cleanup: Promise<void> | undefined;
-  const reconcileAssets = () => {
-    if (cleanup) return cleanup;
-    cleanup = media
-      .reconcilePending()
-      .then((result) => {
-        if (result.failed) console.error('部分未完成素材仍待清理，请检查存储连接后重试');
-      })
-      .catch(() => console.error('素材恢复检查未完成，请检查数据库与存储连接'))
-      .finally(() => {
-        cleanup = undefined;
-      });
-    return cleanup;
-  };
-  await reconcileAssets();
-  const cleanupTimer = setInterval(() => {
-    void reconcileAssets();
-  }, 60_000);
-  cleanupTimer.unref();
-  app.addHook('onClose', async () => {
-    clearInterval(cleanupTimer);
-    await runner.stop();
-    await cleanup;
-    await blobStorage.close?.();
-    await db.close();
-  });
+  app.addHook('onClose', runtime.close);
+  runtime.startMaintenance();
   if (options.worker !== false) await runner.start();
-  return { app, db, repo, media, runner, accounts };
+  return { app, db, repo, media, runner, accounts, quotas };
 }

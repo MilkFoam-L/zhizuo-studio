@@ -15,8 +15,31 @@ export class Conflict extends Error {
 export class NotFound extends Error {
   statusCode = 404;
 }
+export function versionAssetIds(
+  version: Pick<ContentVersion, 'assetId' | 'poster' | 'inputSnapshot'>,
+) {
+  const snapshot = version.inputSnapshot;
+  const reference =
+    snapshot &&
+    typeof snapshot === 'object' &&
+    'referenceAssetId' in snapshot &&
+    typeof snapshot.referenceAssetId === 'string'
+      ? snapshot.referenceAssetId
+      : undefined;
+  return [version.assetId, version.poster?.assetId, reference].filter((id): id is string => !!id);
+}
 export class Repository {
   constructor(readonly db: Database) {}
+  private async lockAssets(projectId: string, ids: (string | undefined)[]) {
+    for (const id of [...new Set(ids.filter((value): value is string => !!value))].sort()) {
+      const [asset] = await this.db.query<{ body: Asset }>(
+        "SELECT body FROM documents WHERE scope='assets' AND id=$1 FOR SHARE",
+        [id],
+      );
+      if (!asset || asset.body.projectId !== projectId)
+        throw new NotFound('素材不存在或不属于当前项目');
+    }
+  }
   async project(id: string) {
     const p = await this.db.get<Project>('projects', id);
     if (!p) throw new NotFound('项目不存在');
@@ -50,14 +73,21 @@ export class Repository {
     revision: number,
     patch: Partial<Pick<Project, 'title' | 'brief' | 'board'>>,
   ) {
-    const project = await this.project(id);
-    const next = { ...project, ...patch, revision: revision + 1, updatedAt: now() };
-    const rows = await this.db.query<{ body: Project }>(
-      `UPDATE documents SET body=$3::jsonb WHERE scope='projects' AND id=$1 AND (body->>'revision')::integer=$2 RETURNING body`,
-      [id, revision, JSON.stringify(next)],
-    );
-    if (!rows.length) throw new Conflict('项目已被其他操作更新，本地修改已保留，请合并最新内容');
-    return rows[0].body;
+    return this.db.transaction(async () => {
+      if (patch.board)
+        await this.lockAssets(
+          id,
+          patch.board.nodes.map((node) => node.data.assetId),
+        );
+      const project = await this.project(id);
+      const next = { ...project, ...patch, revision: revision + 1, updatedAt: now() };
+      const rows = await this.db.query<{ body: Project }>(
+        `UPDATE documents SET body=$3::jsonb WHERE scope='projects' AND id=$1 AND (body->>'revision')::integer=$2 RETURNING body`,
+        [id, revision, JSON.stringify(next)],
+      );
+      if (!rows.length) throw new Conflict('项目已被其他操作更新，本地修改已保留，请合并最新内容');
+      return rows[0].body;
+    });
   }
   async append(id: string, node: Project['board']['nodes'][number], source = 'brief') {
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -81,18 +111,21 @@ export class Repository {
     throw new Conflict('项目正在频繁更新，请稍后刷新查看结果');
   }
   async version(v: Omit<ContentVersion, 'id' | 'createdAt'> & { id?: string }) {
-    const version: ContentVersion = { ...v, id: v.id ?? randomUUID(), createdAt: now() };
-    await this.db.put('versions', version.id, version);
-    await this.append(
-      v.projectId,
-      {
-        id: version.id,
-        type: 'content',
-        position: { x: 0, y: 0 },
-        data: { kind: v.kind, label: v.label, versionId: version.id, assetId: v.assetId },
-      },
-      v.parentVersionId ?? 'brief',
-    );
-    return version;
+    return this.db.transaction(async () => {
+      await this.lockAssets(v.projectId, versionAssetIds(v));
+      const version: ContentVersion = { ...v, id: v.id ?? randomUUID(), createdAt: now() };
+      await this.db.put('versions', version.id, version);
+      await this.append(
+        v.projectId,
+        {
+          id: version.id,
+          type: 'content',
+          position: { x: 0, y: 0 },
+          data: { kind: v.kind, label: v.label, versionId: version.id, assetId: v.assetId },
+        },
+        v.parentVersionId ?? 'brief',
+      );
+      return version;
+    });
   }
 }

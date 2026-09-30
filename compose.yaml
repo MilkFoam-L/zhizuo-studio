@@ -21,6 +21,7 @@ services:
       S3_PREFIX: ${S3_PREFIX:-zhizuo/assets}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
       MAX_DAILY_TASKS: ${MAX_DAILY_TASKS:-100}
+      WORKER_MODE: ${WORKER_MODE:-inline}
     volumes:
       - studio-data:/app/.data
     restart: unless-stopped

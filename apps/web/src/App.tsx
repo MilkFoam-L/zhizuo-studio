@@ -5,6 +5,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowRight,
   BookOpen,
+  ChartNoAxesCombined,
   ChevronRight,
   FolderOpen,
   LayoutTemplate,
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import { api, json, message, SESSION_EXPIRED_EVENT, type SessionInfo } from './api';
 import './accounts.css';
+import './usage.css';
 const Dashboard = lazy(() =>
   import('./Dashboard').then((module) => ({ default: module.Dashboard })),
 );
@@ -28,6 +30,7 @@ const ProjectEditor = lazy(() =>
 const AccountAdmin = lazy(() =>
   import('./AccountAdmin').then((module) => ({ default: module.AccountAdmin })),
 );
+const Usage = lazy(() => import('./Usage').then((module) => ({ default: module.Usage })));
 import { ErrorBox, Modal, Spinner, Toast } from './ui';
 const currentRoute = () => window.location.hash.slice(1) || '/';
 export function App() {
@@ -233,13 +236,15 @@ export function App() {
   const projectId = route.startsWith('/project/') ? route.split('/')[2] : undefined;
   const canManageAccounts = session.mode === 'accounts' && session.user?.role === 'admin';
   const page =
-    route === '/accounts'
-      ? 'accounts'
-      : route === '/settings'
-        ? 'settings'
-        : route === '/templates'
-          ? 'templates'
-          : 'projects';
+    route === '/usage'
+      ? 'usage'
+      : route === '/accounts'
+        ? 'accounts'
+        : route === '/settings'
+          ? 'settings'
+          : route === '/templates'
+            ? 'templates'
+            : 'projects';
   return (
     <div className={`app-shell ${projectId ? 'in-editor' : ''}`}>
       <a
@@ -252,7 +257,7 @@ export function App() {
       >
         跳到工作区
       </a>
-      <aside className="sidebar">
+      <aside className={`sidebar ${canManageAccounts ? 'sidebar-with-accounts' : ''}`}>
         <a href="#/" className="brand-link" aria-label="织作首页">
           <Brand />
         </a>
@@ -287,6 +292,16 @@ export function App() {
           >
             <Settings2 size={19} />
             模型接入
+          </a>
+          <a
+            className={page === 'usage' ? 'active' : ''}
+            href="#/usage"
+            aria-current={page === 'usage' ? 'page' : undefined}
+            aria-label="用量与额度"
+            title="用量与额度"
+          >
+            <ChartNoAxesCombined size={19} />
+            用量与额度
           </a>
           {canManageAccounts && (
             <a
@@ -367,6 +382,8 @@ export function App() {
             <ProjectEditor key={projectId} id={projectId} notify={notify} />
           ) : page === 'settings' ? (
             <Providers notify={notify} />
+          ) : page === 'usage' ? (
+            <Usage session={session} notify={notify} />
           ) : page === 'accounts' ? (
             canManageAccounts && session.user ? (
               <AccountAdmin currentUser={session.user} notify={notify} />

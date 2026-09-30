@@ -81,8 +81,10 @@ function remoteStorage() {
 async function harness(t: TestContext, backend: 'local' | 's3') {
   const dir = await mkdtemp(path.join(tmpdir(), 'zhizuo-media-storage-test-'));
   let db: Database | undefined;
+  let media: Media | undefined;
   const remote = remoteStorage();
   t.after(async () => {
+    await media?.close();
     remote.storage.close();
     await db?.close();
     await rm(dir, { recursive: true, force: true });
@@ -90,7 +92,7 @@ async function harness(t: TestContext, backend: 'local' | 's3') {
   db = await openDatabase(dir);
   const storage = backend === 'local' ? new LocalStorage(dir) : remote.storage;
   const repo = new Repository(db);
-  const media = new Media(db, dir, storage);
+  media = new Media(db, dir, storage);
   return { dir, db, storage, repo, media, remote };
 }
 
@@ -245,12 +247,30 @@ test('Media compensates failed database writes and recovers a committed write wi
   const project = await repo.create('记录补偿', brief);
   const input = await sourceJpeg();
   for (const persisted of [false, true]) {
+    let publication = false,
+      threw = false,
+      depth = 0;
     const failingDatabase: Database = {
       ...db,
       async put(scope, id, body) {
         if (scope !== 'assets') return db.put(scope, id, body);
-        if (persisted) await db.put(scope, id, body);
-        throw new Error('simulated database acknowledgement failure');
+        if (!persisted) throw new Error('simulated database acknowledgement failure');
+        await db.put(scope, id, body);
+        publication = true;
+      },
+      async transaction<T>(work: () => Promise<T>) {
+        depth++;
+        let result: T;
+        try {
+          result = await db.transaction(work);
+        } finally {
+          depth--;
+        }
+        if (depth === 0 && publication && !threw) {
+          threw = true;
+          throw new Error('simulated database acknowledgement failure');
+        }
+        return result;
       },
     };
     const media = new Media(failingDatabase, dir, remote.storage);
@@ -343,11 +363,28 @@ test('bookkeeping cleanup failure preserves a committed asset and a later sweep 
 test('uncertain database commit and unavailable reread retain both objects until a safe reconciliation', async (t) => {
   const { dir, db, repo, remote } = await harness(t, 's3');
   const project = await repo.create('未知提交结果', brief);
+  let publication = false,
+    threw = false,
+    depth = 0;
   const wrapped: Database = {
     ...db,
     async put(scope, id, body) {
       await db.put(scope, id, body);
-      if (scope === 'assets') throw new Error('database acknowledgement unavailable');
+      if (scope === 'assets') publication = true;
+    },
+    async transaction<T>(work: () => Promise<T>) {
+      depth++;
+      let result: T;
+      try {
+        result = await db.transaction(work);
+      } finally {
+        depth--;
+      }
+      if (depth === 0 && publication && !threw) {
+        threw = true;
+        throw new Error('database acknowledgement unavailable');
+      }
+      return result;
     },
     async get<T>(scope: Parameters<Database['get']>[0], id: string): Promise<T | undefined> {
       if (scope === 'assets') throw new Error('database reread unavailable');

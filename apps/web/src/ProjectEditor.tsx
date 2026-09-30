@@ -1277,7 +1277,8 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
                       </p>
                     </div>
                     <p className="hint">
-                      调用可能产生服务商费用。重复创作会提交新的任务；取消可能无法终止已发送的模型请求。
+                      每次创作将预占 1
+                      次任务额度，完成后结算。服务商费用以账单为准；重复创作会提交新任务，取消可能无法终止已发送的请求。
                     </p>
                     {genError && <ErrorBox>{genError}</ErrorBox>}
                     <div className="modal-actions">

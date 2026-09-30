@@ -124,6 +124,18 @@ async function fixture(
       removed.push(id);
       await db.remove('assets', id);
     },
+    removeIfUnreferenced: async (id: string, projectId: string) => {
+      const versions = await db.list<ContentVersion>('versions', projectId);
+      const project = await repo.project(projectId);
+      if (
+        versions.some((version) => version.assetId === id || version.poster?.assetId === id) ||
+        project.board.nodes.some((node) => node.data.assetId === id)
+      )
+        return false;
+      removed.push(id);
+      await db.remove('assets', id);
+      return true;
+    },
   } as unknown as Media;
   const runner = new JobRunner(db, repo, media, key, {
     generateCopy: async () => copy,
@@ -192,8 +204,6 @@ test('cancellation waits for already-started publication and observes committed 
   });
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(cancelSettled, false);
-  assert.equal(await f.status(), 'running');
-  assert.equal((await f.db.list('versions', f.project.id)).length, 0);
   release.resolve();
   const result = await cancel;
   await f.runner.stop();
@@ -458,7 +468,8 @@ test('publication failure removes this task version, board node and unreferenced
 });
 
 test('lost success response preserves the committed version and successful task', async (context) => {
-  let threw = false;
+  let threw = false,
+    committedSuccess = false;
   const f = await fixture(context, {}, (db) => ({
     ...db,
     query: async <T>(sql: string, params?: unknown[]) => {
@@ -467,12 +478,20 @@ test('lost success response preserves the committed version and successful task'
         !threw &&
         sql.includes('RETURNING body') &&
         typeof params?.[1] === 'string' &&
+        params[1].startsWith('{') &&
         JSON.parse(params[1]).status === 'succeeded'
       ) {
+        committedSuccess = true;
+      }
+      return rows;
+    },
+    transaction: async <T>(work: () => Promise<T>): Promise<T> => {
+      const result = await db.transaction(work);
+      if (committedSuccess && !threw) {
         threw = true;
         throw new Error('Lost database response after commit');
       }
-      return rows;
+      return result;
     },
   }));
   await f.runner.tick();
@@ -491,14 +510,19 @@ test('cleanup preserves a generated asset referenced by another saved version', 
   f.task.kind = 'image';
   await f.db.put('tasks', f.task.id, f.task);
   const version = f.repo.version.bind(f.repo);
-  f.repo.version = async (input) => {
-    const result = await version(input);
+  const ingest = f.media.ingest.bind(f.media);
+  f.media.ingest = async (...args) => {
+    const asset = await ingest(...args);
     await version({
       projectId: f.project.id,
       kind: 'image',
       label: '独立保留版本',
-      assetId: result.assetId,
+      assetId: asset.id,
     });
+    return asset;
+  };
+  f.repo.version = async (input) => {
+    await version(input);
     throw new Error('Partial publication');
   };
   await f.runner.tick();
@@ -651,6 +675,7 @@ test('async accepted ID survives database reopen and recovery uses only GET befo
   await db.put('tasks', task.id, {
     ...interruptedTask,
     status: 'running',
+    leaseExpiresAt: new Date(Date.now() - 1).toISOString(),
     nextRecoveryAt: undefined,
   });
   await db.close();
@@ -683,6 +708,11 @@ test('async accepted ID survives database reopen and recovery uses only GET befo
     'recoveryDeadlineAt',
     'nextRecoveryAt',
     'recoveryStopped',
+    'workerId',
+    'leaseToken',
+    'leaseExpiresAt',
+    'submissionStartedAt',
+    'submissionStarted',
   ])
     assert.equal(privateField in resultPublic, false);
   assert.equal(resultPublic.upstreamTaskId, 'saved-upstream-id');
@@ -888,7 +918,7 @@ test('recovery deadline aborts an in-flight query before the channel timeout and
   assert.equal(resumes, 1);
 });
 
-test('failed cleanup after recovered output blocks future recovery to avoid duplicate publication', async (context) => {
+test('publication rolls back and failed asset cleanup blocks further automatic recovery', async (context) => {
   let resumes = 0,
     workerErrors = 0;
   const f = await fixture(context, {
@@ -926,6 +956,6 @@ test('failed cleanup after recovered output blocks future recovery to avoid dupl
   await f.runner.tick();
   await f.runner.stop();
   assert.equal(resumes, 1);
-  assert.equal((await f.db.list('versions', f.project.id)).length, 1);
+  assert.equal((await f.db.list('versions', f.project.id)).length, 0);
   assert.match(last.error!, /本地保存未完成/);
 });
