@@ -1,4 +1,6 @@
-# 织作阶段验证记录
+# 织作基础阶段验证记录
+
+本文件对应基础阶段提交 `cf84867`；后续账号和对象存储改动见 [VERIFICATION-ACCOUNTS-STORAGE.md](VERIFICATION-ACCOUNTS-STORAGE.md)。
 
 日期：2026-09-30。当前目标为中文电商与内容创作者的 AI 内容生产工作台；完整实施范围和未完成项保留在 TASKS.md。本记录只证明已实际检查的范围。
 

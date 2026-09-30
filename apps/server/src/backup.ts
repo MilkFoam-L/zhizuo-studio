@@ -41,7 +41,7 @@ const importSchema = z.object({
   assets: z.array(z.object({ id: z.string().uuid(), name: z.string().max(200) })).max(200),
   versions: z.array(versionSchema).max(1000),
 });
-export async function restore(repo: Repository, media: Media, zip: Buffer) {
+export async function restore(repo: Repository, media: Media, zip: Buffer, workspaceId = 'local') {
   let size = 0;
   const files = unzipSync(zip, {
     filter: (file) => {
@@ -94,7 +94,7 @@ export async function restore(repo: Repository, media: Media, zip: Buffer) {
       parent = input.versions.find((x) => x.id === parent)?.parentVersionId;
     }
   }
-  const p = await repo.create(`${input.project.title}（恢复）`, input.project.brief);
+  const p = await repo.create(`${input.project.title}（恢复）`, input.project.brief, workspaceId);
   const assetMap = new Map<string, string>();
   const versionMap = new Map(input.versions.map((v) => [v.id, randomUUID()]));
   try {

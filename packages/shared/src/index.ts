@@ -59,6 +59,7 @@ export interface Board {
 }
 export interface Project {
   id: string;
+  workspaceId?: string;
   title: string;
   brief: Brief;
   board: Board;

@@ -1,4 +1,6 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
+import { AccountService, type PublicAccount } from './accounts';
+import { createStorage, type S3StorageConfig } from './storage';
 import multipart from '@fastify/multipart';
 import cookie from '@fastify/cookie';
 import staticFiles from '@fastify/static';
@@ -19,6 +21,7 @@ import {
   publicProvider,
   type StoredProvider,
   type StoredTask,
+  type JobExecution,
 } from './jobs';
 import { validateProviderInput, encryptSecret, decryptSecret, testConnection } from './providers';
 import { boardSchema, briefSchema, copySchema, posterSchema } from './validation';
@@ -32,11 +35,14 @@ export interface AppOptions {
   origin?: string;
   worker?: boolean;
   staticRoot?: string;
+  accounts?: { bootstrap?: { email: string; password: string; displayName?: string } };
+  storage?: S3StorageConfig;
+  execution?: Omit<JobExecution, 'canRunProject'>;
 }
 const idSchema = z.string().uuid();
 const hash = (v: string) => createHash('sha256').update(v).digest();
 const plainProvider = (p: StoredProvider) => {
-  const { secret, id, createdAt, ...config } = p;
+  const { secret, id, workspaceId, createdAt, ...config } = p;
   return config;
 };
 export async function createApp(options: AppOptions) {
@@ -55,12 +61,69 @@ export async function createApp(options: AppOptions) {
   if (!/^[a-f0-9]{64}$/i.test(key)) throw new Error('ENCRYPTION_KEY 必须为 64 位十六进制字符串');
   const db = await openDatabase(options.dataDir, options.databaseUrl);
   const repo = new Repository(db);
-  const media = new Media(db, options.dataDir);
-  const runner = new JobRunner(db, repo, media, key);
+  const blobStorage = createStorage(options.dataDir, options.storage);
+  const media = new Media(db, options.dataDir, blobStorage);
+  const accounts = options.accounts ? new AccountService(db) : undefined;
+  if (accounts) {
+    await accounts.initialize(options.accounts?.bootstrap);
+    if (!(await accounts.listAccounts()).length) {
+      await db.close();
+      throw new Error('首次启用账号模式需要配置 ADMIN_EMAIL 和 ADMIN_PASSWORD');
+    }
+    await db.query('INSERT INTO migrations(version) VALUES(2) ON CONFLICT DO NOTHING');
+  }
+  const mode = accounts ? 'accounts' : options.password ? 'shared' : 'local';
+  const identities = new WeakMap<FastifyRequest, PublicAccount>();
+  const workspace = (req: FastifyRequest) => identities.get(req)?.workspace.id ?? 'local';
+  const ownedProject = async (req: FastifyRequest, id: string) => {
+    const project = await repo.project(id);
+    if ((project.workspaceId ?? 'local') !== workspace(req)) throw new NotFound('项目不存在');
+    return project;
+  };
+  const ownedProvider = async (req: FastifyRequest, id: string) => {
+    const provider = await db.get<StoredProvider>('providers', id);
+    if (!provider || (provider.workspaceId ?? 'local') !== workspace(req))
+      throw new NotFound('服务商不存在');
+    return provider;
+  };
+  const projectsFor = (req: FastifyRequest) =>
+    db
+      .query<{ body: Project }>(
+        "SELECT body FROM documents WHERE scope='projects' AND COALESCE(body->>'workspaceId', 'local')=$1 ORDER BY body->>'updatedAt' DESC",
+        [workspace(req)],
+      )
+      .then((rows) => rows.map((row) => row.body));
+  const canRunProject = async (projectId: string) => {
+    const project = await db.get<Project>('projects', projectId);
+    if (!project) return false;
+    const owner = project.workspaceId ?? 'local';
+    if (!accounts) return owner === 'local';
+    if (owner === 'local') return false;
+    return (
+      (
+        await db.query(
+          'SELECT 1 FROM auth_workspaces w JOIN auth_users u ON u.id=w.owner_id WHERE w.id=$1 AND NOT u.disabled',
+          [owner],
+        )
+      ).length > 0
+    );
+  };
+  const runner = new JobRunner(db, repo, media, key, { ...options.execution, canRunProject });
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 });
   await app.register(cookie);
   await app.register(multipart, { limits: { fileSize: 100 * 1024 * 1024, files: 1, fields: 5 } });
   const loginAttempts = new Map<string, { count: number; until: number }>();
+  const loginLocks = new Map<string, Promise<unknown>>();
+  const loginGate = async <T>(ip: string, fn: () => Promise<T>) => {
+    const previous = loginLocks.get(ip) ?? Promise.resolve();
+    const pending = previous.then(fn, fn);
+    loginLocks.set(ip, pending);
+    try {
+      return await pending;
+    } finally {
+      if (loginLocks.get(ip) === pending) loginLocks.delete(ip);
+    }
+  };
   const maxDaily = Number(process.env.MAX_DAILY_TASKS || 100);
   if (!Number.isSafeInteger(maxDaily) || maxDaily < 1)
     throw new Error('MAX_DAILY_TASKS 必须是正整数');
@@ -80,10 +143,33 @@ export async function createApp(options: AppOptions) {
   const getId = (req: { params: unknown }, name = 'id') =>
     idSchema.parse((req.params as Record<string, unknown>)[name]);
   const isAuthenticated = async (token?: string) => {
+    if (accounts) return !!(token && (await accounts.session(token)));
     if (!options.password) return true;
     if (!token) return false;
     const session = await db.get<{ expiresAt: number }>('sessions', hash(token).toString('hex'));
     return !!session && session.expiresAt > Date.now();
+  };
+  const revalidateActor = async (req: FastifyRequest, admin = false) => {
+    if (accounts) {
+      const user = req.cookies.zhizuo_session
+        ? await accounts.session(req.cookies.zhizuo_session)
+        : undefined;
+      if (!user) {
+        const error = new Error('登录状态已失效，请重新登录') as Error & { statusCode: number };
+        error.statusCode = 401;
+        throw error;
+      }
+      if (admin && user.role !== 'admin') {
+        const error = new Error('需要管理员权限') as Error & { statusCode: number };
+        error.statusCode = 403;
+        throw error;
+      }
+      identities.set(req, user);
+    } else if (!(await isAuthenticated(req.cookies.zhizuo_session))) {
+      const error = new Error('登录状态已失效，请重新登录') as Error & { statusCode: number };
+      error.statusCode = 401;
+      throw error;
+    }
   };
   app.addHook('onRequest', async (req, reply) => {
     reply
@@ -91,8 +177,14 @@ export async function createApp(options: AppOptions) {
       .header('Referrer-Policy', 'same-origin')
       .header('X-Frame-Options', 'DENY');
     if (req.url.startsWith('/api')) reply.header('Cache-Control', 'no-store');
-    const host = req.headers.host?.split(':')[0];
-    if (!options.password && !['127.0.0.1', 'localhost', '[::1]'].includes(host || ''))
+    const host = (() => {
+      try {
+        return new URL(`http://${req.headers.host}`).hostname;
+      } catch {
+        return '';
+      }
+    })();
+    if (mode === 'local' && !['127.0.0.1', 'localhost', '[::1]'].includes(host))
       return reply
         .code(403)
         .send({ error: '本地模式只接受 loopback 主机，请为托管模式配置访问密码' });
@@ -113,11 +205,26 @@ export async function createApp(options: AppOptions) {
     const route = req.routeOptions.url;
     if (route?.startsWith('/api/')) {
       reply.header('Cache-Control', 'no-store');
-      if (
-        !['/api/session', '/api/health'].includes(route) &&
-        !(await isAuthenticated(req.cookies.zhizuo_session))
-      )
-        return reply.code(401).send({ error: '请先登录工作台' });
+      if (accounts && req.cookies.zhizuo_session) {
+        const user = await accounts.session(req.cookies.zhizuo_session);
+        if (user) identities.set(req, user);
+      }
+      if (!['/api/session', '/api/health'].includes(route)) {
+        if (accounts ? !identities.has(req) : !(await isAuthenticated(req.cookies.zhizuo_session)))
+          return reply.code(401).send({ error: '请先登录工作台' });
+        if (route.startsWith('/api/admin/') && identities.get(req)?.role !== 'admin')
+          return reply.code(403).send({ error: '需要管理员权限' });
+        if (route.startsWith('/api/projects/:id')) await ownedProject(req, getId(req));
+        else if (route.startsWith('/api/providers/:id')) await ownedProvider(req, getId(req));
+        else
+          for (const scope of ['assets', 'versions', 'tasks'] as const) {
+            if (route.startsWith(`/api/${scope}/:id`)) {
+              const record = await db.get<{ projectId: string }>(scope, getId(req));
+              if (!record) throw new NotFound('资源不存在');
+              await ownedProject(req, record.projectId);
+            }
+          }
+      }
     }
   });
   app.setErrorHandler((err, req, reply) => {
@@ -138,46 +245,112 @@ export async function createApp(options: AppOptions) {
     ok: true,
     version: '0.1.0',
     storage: options.databaseUrl ? 'postgresql' : 'pglite',
-    mode: options.password ? 'private-hosted' : 'local',
+    mode: accounts ? 'accounts' : options.password ? 'private-hosted' : 'local',
+    mediaStorage: options.storage ? 's3' : 'local',
   }));
   app.get('/api/session', async (req) => ({
-    authenticated: await isAuthenticated(req.cookies.zhizuo_session),
-    requiresPassword: !!options.password,
+    authenticated: accounts
+      ? identities.has(req)
+      : await isAuthenticated(req.cookies.zhizuo_session),
+    requiresPassword: mode !== 'local',
+    mode,
+    ...(identities.has(req) ? { user: identities.get(req) } : {}),
   }));
-  app.post('/api/session', async (req, reply) => {
-    const b = z.object({ password: z.string().max(1024) }).parse(req.body);
-    const rate = loginAttempts.get(req.ip);
-    if (rate && rate.until > Date.now() && rate.count >= 5)
-      return reply.code(429).send({ error: '尝试次数过多，请 15 分钟后再试' });
-    if (options.password && !timingSafeEqual(hash(b.password), hash(options.password))) {
-      loginAttempts.set(req.ip, {
-        count: (rate && rate.until > Date.now() ? rate.count : 0) + 1,
-        until: Date.now() + 15 * 60_000,
+  app.post('/api/session', async (req, reply) =>
+    loginGate(req.ip, async () => {
+      const b = z
+        .object({ password: z.string().max(1024), email: z.string().max(254).optional() })
+        .parse(req.body);
+      const rate = loginAttempts.get(req.ip);
+      if (rate && rate.until > Date.now() && rate.count >= 5)
+        return reply.code(429).send({ error: '尝试次数过多，请 15 分钟后再试' });
+      let accountSession: Awaited<ReturnType<AccountService['login']>> | undefined;
+      let invalid = false;
+      if (accounts) {
+        try {
+          accountSession = await accounts.login(b.email ?? '', b.password);
+        } catch (error) {
+          if ((error as { statusCode?: number }).statusCode !== 401) throw error;
+          invalid = true;
+        }
+      } else
+        invalid = !!options.password && !timingSafeEqual(hash(b.password), hash(options.password));
+      if (invalid) {
+        loginAttempts.set(req.ip, {
+          count: (rate && rate.until > Date.now() ? rate.count : 0) + 1,
+          until: Date.now() + 15 * 60_000,
+        });
+        return reply.code(401).send({ error: '访问密码不正确' });
+      }
+      loginAttempts.delete(req.ip);
+      const token = accountSession?.token ?? randomBytes(32).toString('hex');
+      if (!accounts)
+        await db.put('sessions', hash(token).toString('hex'), {
+          expiresAt: Date.now() + 7 * 86400_000,
+        });
+      reply.setCookie('zhizuo_session', token, {
+        httpOnly: true,
+        secure: options.origin?.startsWith('https:'),
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 7 * 86400,
       });
-      return reply.code(401).send({ error: '访问密码不正确' });
-    }
-    loginAttempts.delete(req.ip);
-    const token = randomBytes(32).toString('hex');
-    await db.put('sessions', hash(token).toString('hex'), {
-      expiresAt: Date.now() + 7 * 86400_000,
-    });
-    reply.setCookie('zhizuo_session', token, {
-      httpOnly: true,
-      secure: options.origin?.startsWith('https:'),
-      sameSite: 'strict',
-      path: '/',
-      maxAge: 7 * 86400,
-    });
-    return { authenticated: true };
-  });
+      return {
+        authenticated: true,
+        requiresPassword: mode !== 'local',
+        mode,
+        ...(accountSession ? { user: accountSession.user } : {}),
+      };
+    }),
+  );
   app.delete('/api/session', async (req, reply) => {
-    if (req.cookies.zhizuo_session)
-      await db.remove('sessions', hash(req.cookies.zhizuo_session).toString('hex'));
+    if (req.cookies.zhizuo_session) {
+      if (accounts) await accounts.logout(req.cookies.zhizuo_session);
+      else await db.remove('sessions', hash(req.cookies.zhizuo_session).toString('hex'));
+    }
     reply.clearCookie('zhizuo_session', { path: '/' });
     return { ok: true };
   });
+  app.get('/api/admin/accounts', async () => accounts!.listAccounts());
+  app.post('/api/admin/accounts', async (req) => {
+    await revalidateActor(req, true);
+    return accounts!.createAccount(
+      z
+        .object({
+          email: z.string().email().max(254),
+          password: z.string().min(12).max(256),
+          displayName: z.string().min(1).max(80),
+        })
+        .parse(req.body),
+    );
+  });
+  app.patch('/api/admin/accounts/:id', async (req) =>
+    serializeTaskCreation(async () => {
+      await revalidateActor(req, true);
+      const { disabled } = z.object({ disabled: z.boolean() }).parse(req.body);
+      if (disabled && identities.get(req)?.id === getId(req)) {
+        const error = new Error('不能停用当前登录的管理员账号') as Error & { statusCode: number };
+        error.statusCode = 409;
+        throw error;
+      }
+      const user = await accounts!.setDisabled(getId(req), disabled);
+      if (disabled) {
+        const allProjects = await db.list<Project>('projects');
+        const owned = new Set(
+          allProjects.filter((p) => p.workspaceId === user.workspace.id).map((p) => p.id),
+        );
+        for (const task of await db.list<StoredTask>('tasks'))
+          if (
+            owned.has(task.projectId) &&
+            ['queued', 'running', 'reconciling'].includes(task.status)
+          )
+            await runner.cancel(task.id);
+      }
+      return user;
+    }),
+  );
   app.get('/api/templates', async () => TEMPLATES);
-  app.get('/api/projects', async () => db.list<Project>('projects'));
+  app.get('/api/projects', async (req) => projectsFor(req));
   const publicDetail = async (id: string) => {
     const d = await repo.detail(id);
     return { ...d, tasks: d.tasks.map((t) => publicTask(t as StoredTask)) };
@@ -190,7 +363,7 @@ export async function createApp(options: AppOptions) {
         templateId: z.enum(['xhs-editorial', 'commerce-product', 'campaign-poster']).optional(),
       })
       .parse(req.body);
-    const p = await repo.create(b.title, { ...EMPTY_BRIEF, ...b.brief });
+    const p = await repo.create(b.title, { ...EMPTY_BRIEF, ...b.brief }, workspace(req));
     if (b.templateId)
       await repo.version({
         projectId: p.id,
@@ -215,12 +388,27 @@ export async function createApp(options: AppOptions) {
       if (ids.size !== b.board.nodes.length) throw new Error('画布节点 ID 重复');
       if (b.board.edges.some((e) => !ids.has(e.source) || !ids.has(e.target)))
         throw new Error('连接引用了不存在的节点');
+      const projectId = getId(req);
+      const assetIds = new Set((await db.list<Asset>('assets', projectId)).map((a) => a.id));
+      const versionIds = new Set(
+        (await db.list<ContentVersion>('versions', projectId)).map((v) => v.id),
+      );
+      if (
+        b.board.nodes.some(
+          (n) =>
+            (n.data.assetId && !assetIds.has(n.data.assetId)) ||
+            (n.data.versionId && !versionIds.has(n.data.versionId)),
+        )
+      )
+        throw new Error('画布引用了不属于当前项目的素材或版本');
     }
     const { revision, ...patch } = b;
     return repo.update(getId(req), revision, patch);
   });
-  app.get('/api/providers', async () =>
-    (await db.list<StoredProvider>('providers')).map(publicProvider),
+  app.get('/api/providers', async (req) =>
+    (await db.list<StoredProvider>('providers'))
+      .filter((p) => (p.workspaceId ?? 'local') === workspace(req))
+      .map(publicProvider),
   );
   app.post('/api/providers', async (req) => {
     const b = validateProviderInput(req.body);
@@ -228,6 +416,7 @@ export async function createApp(options: AppOptions) {
     if (!apiKey?.trim()) throw new Error('请填写 API Key');
     const p: StoredProvider = {
       ...config,
+      workspaceId: workspace(req),
       id: randomUUID(),
       secret: encryptSecret(apiKey, key!),
       createdAt: now(),
@@ -284,10 +473,11 @@ export async function createApp(options: AppOptions) {
   app.get('/api/assets/:id/thumbnail', async (req, reply) => {
     const id = getId(req);
     if (!(await db.get('assets', id))) throw new NotFound('素材不存在');
-    return reply.type('image/webp').send(await readFile(media.filename(id, true)));
+    return reply.type('image/webp').send(await media.thumbnail(id));
   });
   app.post('/api/projects/:id/tasks', async (req, reply) =>
     serializeTaskCreation(async () => {
+      await revalidateActor(req);
       const id = getId(req);
       const project = await repo.project(id);
       const b = z
@@ -310,13 +500,16 @@ export async function createApp(options: AppOptions) {
       const idStable = `${taskId.slice(0, 8)}-${taskId.slice(8, 12)}-4${taskId.slice(13, 16)}-a${taskId.slice(17, 20)}-${taskId.slice(20, 32)}`;
       const old = await db.get<StoredTask>('tasks', idStable);
       if (old) return publicTask(old);
+      const workspaceProjects = new Set((await projectsFor(req)).map((p) => p.id));
       const tasks = await db.list<StoredTask>('tasks');
-      if (tasks.filter((t) => day(t.createdAt) === day(now())).length >= maxDaily)
+      if (
+        tasks.filter((t) => workspaceProjects.has(t.projectId) && day(t.createdAt) === day(now()))
+          .length >= maxDaily
+      )
         return reply
           .code(429)
           .send({ error: '今日任务数量已达上限，请明天再试或由管理员调整限额' });
-      const provider = await db.get<StoredProvider>('providers', b.providerId);
-      if (!provider) throw new Error('请先配置并选择服务商');
+      const provider = await ownedProvider(req, b.providerId);
       if (
         (b.kind === 'copy' && !provider.textModel) ||
         (b.kind === 'image' && !provider.imageModel)
@@ -448,7 +641,7 @@ export async function createApp(options: AppOptions) {
         acknowledged: z.literal(true),
       })
       .parse(req.body);
-    await repo.project(b.projectId);
+    await ownedProject(req, b.projectId);
     const files: Record<string, Uint8Array> = {};
     const manifest: { id: string; label: string; warnings: string[] }[] = [];
     let total = 0;
@@ -500,9 +693,15 @@ export async function createApp(options: AppOptions) {
   app.post('/api/import', async (req) => {
     const file = await req.file();
     if (!file) throw new Error('请选择织作项目 ZIP 备份');
-    return restore(repo, media, await file.toBuffer());
+    return restore(repo, media, await file.toBuffer(), workspace(req));
   });
-  app.get('/api/usage', async () => ({ dailyLimit: maxDaily, records: await db.list('usage') }));
+  app.get('/api/usage', async (req) => {
+    const ids = new Set((await projectsFor(req)).map((p) => p.id));
+    return {
+      dailyLimit: maxDaily,
+      records: (await db.list<{ projectId: string }>('usage')).filter((r) => ids.has(r.projectId)),
+    };
+  });
   if (options.staticRoot) {
     try {
       await stat(path.join(options.staticRoot, 'index.html'));
@@ -516,10 +715,32 @@ export async function createApp(options: AppOptions) {
       /* Development server serves the web app. */
     }
   }
+  let cleanup: Promise<void> | undefined;
+  const reconcileAssets = () => {
+    if (cleanup) return cleanup;
+    cleanup = media
+      .reconcilePending()
+      .then((result) => {
+        if (result.failed) console.error('部分未完成素材仍待清理，请检查存储连接后重试');
+      })
+      .catch(() => console.error('素材恢复检查未完成，请检查数据库与存储连接'))
+      .finally(() => {
+        cleanup = undefined;
+      });
+    return cleanup;
+  };
+  await reconcileAssets();
+  const cleanupTimer = setInterval(() => {
+    void reconcileAssets();
+  }, 60_000);
+  cleanupTimer.unref();
   app.addHook('onClose', async () => {
+    clearInterval(cleanupTimer);
     await runner.stop();
+    await cleanup;
+    await blobStorage.close?.();
     await db.close();
   });
   if (options.worker !== false) await runner.start();
-  return { app, db, repo, media, runner };
+  return { app, db, repo, media, runner, accounts };
 }

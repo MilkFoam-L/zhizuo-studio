@@ -22,6 +22,7 @@ const RECOVERY_WINDOW_MS = 15 * 60 * 1000;
 const RECOVERY_DELAYS_MS = [5000, 15000, 45000];
 
 export interface StoredProvider extends Omit<ProviderInput, 'apiKey'> {
+  workspaceId?: string;
   id: string;
   secret: string;
   createdAt: string;
@@ -49,7 +50,7 @@ export function publicTask(t: StoredTask): GenerationTask {
   return rest;
 }
 export function publicProvider(p: StoredProvider) {
-  const { secret, ...rest } = p;
+  const { secret, workspaceId, ...rest } = p;
   return { ...rest, hasKey: !!secret };
 }
 
@@ -58,6 +59,7 @@ export interface JobExecution {
   generateImage?: typeof generateImage;
   resumeImage?: typeof resumeImage;
   onWorkerError?: () => void;
+  canRunProject?: (projectId: string) => Promise<boolean>;
 }
 
 export class JobRunner {
@@ -95,6 +97,21 @@ export class JobRunner {
       /^[a-zA-Z0-9_-]{1,200}$/.test(t.upstreamTaskId) &&
       (t.recoveryAttempts ?? 0) < MAX_RECOVERY_ATTEMPTS &&
       this.recoveryDeadline(t) > Date.now()
+    );
+  }
+
+  private async cancelUnavailable(t: StoredTask) {
+    const error =
+      '所属账号或工作空间已不可用，任务已取消。' +
+      (t.upstreamTaskId ? '已停止自动查询，供应商可能仍在生成并计费，请核对供应商记录。' : '');
+    // Callers hold the task lock; calling cancel() here would acquire it twice.
+    await this.db.query(
+      `UPDATE documents SET body=(body - 'nextRecoveryAt') || $2::jsonb
+       WHERE scope='tasks' AND id=$1 AND body->>'status' IN ('queued','running','reconciling')`,
+      [
+        t.id,
+        JSON.stringify({ status: 'cancelled', recoveryStopped: true, error, updatedAt: now() }),
+      ],
     );
   }
 
@@ -181,6 +198,10 @@ export class JobRunner {
       if (recovering && !this.canRecover(t)) continue;
       await this.locked(t.id, async () => {
         if (this.stopping || this.active.has(t.id)) return;
+        if (this.execution.canRunProject && !(await this.execution.canRunProject(t.projectId))) {
+          await this.cancelUnavailable(t);
+          return;
+        }
         const patch = {
           status: 'running',
           attempts: t.attempts + 1,
@@ -301,6 +322,20 @@ export class JobRunner {
       const key = decryptSecret(t.secret, this.key);
       let copy: Awaited<ReturnType<typeof generateCopy>> | undefined;
       let image: Awaited<ReturnType<typeof generateImage>> | undefined;
+      let reference;
+      if (t.kind === 'image' && !recovering && t.referenceAssetId) {
+        const asset = await this.media.owned(t.referenceAssetId, t.projectId);
+        reference = {
+          bytes: await this.media.bytes(asset.id),
+          mime: asset.mime,
+          name: asset.name,
+        };
+      }
+      // Account status can change after claiming or while loading a reference image.
+      if (this.execution.canRunProject && !(await this.execution.canRunProject(t.projectId))) {
+        await this.locked(t.id, () => this.cancelUnavailable(t));
+        return;
+      }
       if (t.kind === 'copy')
         copy = await (this.execution.generateCopy ?? generateCopy)(
           t.config,
@@ -317,15 +352,6 @@ export class JobRunner {
           controller.signal,
         );
       else {
-        let reference;
-        if (t.referenceAssetId) {
-          const asset = await this.media.owned(t.referenceAssetId, t.projectId);
-          reference = {
-            bytes: await this.media.bytes(asset.id),
-            mime: asset.mime,
-            name: asset.name,
-          };
-        }
         image = await (this.execution.generateImage ?? generateImage)(
           t.config,
           key,

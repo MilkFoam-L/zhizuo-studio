@@ -1,7 +1,7 @@
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   BookOpen,
@@ -12,8 +12,10 @@ import {
   Settings2,
   Sparkles,
   Sprout,
+  UsersRound,
 } from 'lucide-react';
-import { api, json, message } from './api';
+import { api, json, message, SESSION_EXPIRED_EVENT, type SessionInfo } from './api';
+import './accounts.css';
 const Dashboard = lazy(() =>
   import('./Dashboard').then((module) => ({ default: module.Dashboard })),
 );
@@ -23,16 +25,22 @@ const Providers = lazy(() =>
 const ProjectEditor = lazy(() =>
   import('./ProjectEditor').then((module) => ({ default: module.ProjectEditor })),
 );
+const AccountAdmin = lazy(() =>
+  import('./AccountAdmin').then((module) => ({ default: module.AccountAdmin })),
+);
 import { ErrorBox, Modal, Spinner, Toast } from './ui';
 const currentRoute = () => window.location.hash.slice(1) || '/';
 export function App() {
   const [route, setRoute] = useState(currentRoute);
-  const [session, setSession] = useState<{ authenticated: boolean; requiresPassword: boolean }>();
+  const [session, setSession] = useState<SessionInfo>();
   const [error, setError] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [help, setHelp] = useState(false);
   const [toast, setToast] = useState<{ text: string; tone: string; id: number }>();
+  const sessionRevision = useRef(0);
   const notify = useCallback(
     (text: string, tone: 'success' | 'error' = 'success') =>
       setToast({ text, tone, id: Date.now() }),
@@ -44,9 +52,40 @@ export function App() {
     return () => window.removeEventListener('hashchange', update);
   }, []);
   useEffect(() => {
-    api<{ authenticated: boolean; requiresPassword: boolean }>('/session')
-      .then(setSession)
-      .catch((e) => setError(message(e)));
+    let active = true;
+    let controller: AbortController | undefined;
+    const refresh = (expired = false) => {
+      const revision = ++sessionRevision.current;
+      controller?.abort();
+      controller = new AbortController();
+      if (expired) {
+        setSession((current) =>
+          current ? { ...current, authenticated: false, user: undefined } : current,
+        );
+        setPassword('');
+        setHelp(false);
+        setToast(undefined);
+        setError('登录状态已过期，请重新登录。尚未保存的项目草稿会保留在此浏览器。');
+      }
+      api<SessionInfo>('/session', { signal: controller.signal })
+        .then((next) => {
+          if (active && revision === sessionRevision.current) {
+            setSession(next);
+            if (next.authenticated) setError('');
+          }
+        })
+        .catch((e) => {
+          if (active && revision === sessionRevision.current) setError(message(e));
+        });
+    };
+    const expired = () => refresh(true);
+    refresh();
+    window.addEventListener(SESSION_EXPIRED_EVENT, expired);
+    return () => {
+      active = false;
+      controller?.abort();
+      window.removeEventListener(SESSION_EXPIRED_EVENT, expired);
+    };
   }, []);
   useEffect(() => {
     if (!toast) return;
@@ -57,10 +96,21 @@ export function App() {
     e.preventDefault();
     setBusy(true);
     setError('');
+    ++sessionRevision.current;
     try {
-      await api('/session', json('POST', { password }));
-      setSession({ authenticated: true, requiresPassword: true });
+      const request = json('POST', {
+        password,
+        ...(session?.mode === 'accounts' ? { email: email.trim() } : {}),
+      });
       setPassword('');
+      const result = await api<Partial<SessionInfo>>('/session', request);
+      // Older single-workspace deployments return only authenticated on login.
+      const next =
+        typeof result.requiresPassword === 'boolean'
+          ? (result as SessionInfo)
+          : await api<SessionInfo>('/session');
+      ++sessionRevision.current;
+      setSession(next);
     } catch (e) {
       setError(message(e));
     } finally {
@@ -68,11 +118,24 @@ export function App() {
     }
   }
   async function logout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
     try {
       await api('/session', json('DELETE'));
-      setSession({ authenticated: false, requiresPassword: true });
+      ++sessionRevision.current;
+      setSession((current) =>
+        current ? { ...current, authenticated: false, user: undefined } : current,
+      );
+      setPassword('');
+      setEmail('');
+      setError('');
+      setHelp(false);
+      setToast(undefined);
+      window.location.hash = '/';
     } catch (e) {
       notify(message(e), 'error');
+    } finally {
+      setLoggingOut(false);
     }
   }
   if (!session)
@@ -112,18 +175,47 @@ export function App() {
         <form className="login-form" onSubmit={login}>
           <span className="eyebrow">WELCOME BACK</span>
           <h2>进入你的创作空间</h2>
-          <p className="muted">输入此工作台的访问密码，继续创作。</p>
-          <Label>
-            访问密码
+          <p className="muted">
+            {session.mode === 'accounts'
+              ? '使用管理员为你开通的账号，进入专属工作空间。'
+              : '输入此工作台的访问密码，继续创作。'}
+          </p>
+          {session.mode === 'accounts' && (
+            <div className="account-login-field">
+              <Label htmlFor="login-email">邮箱</Label>
+              <Input
+                id="login-email"
+                name="email"
+                required
+                autoFocus
+                type="email"
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                maxLength={254}
+                disabled={busy}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+          )}
+          <div className="account-login-field">
+            <Label htmlFor="login-password">
+              {session.mode === 'accounts' ? '账号密码' : '访问密码'}
+            </Label>
             <Input
+              id="login-password"
+              name="password"
               required
-              autoFocus
+              autoFocus={session.mode !== 'accounts'}
               type="password"
               autoComplete="current-password"
+              maxLength={session.mode === 'accounts' ? 256 : 1024}
+              disabled={busy}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-          </Label>
+          </div>
           {error && <ErrorBox>{error}</ErrorBox>}
           <Button className="button primary full" disabled={busy}>
             {busy ? (
@@ -139,8 +231,15 @@ export function App() {
       </div>
     );
   const projectId = route.startsWith('/project/') ? route.split('/')[2] : undefined;
+  const canManageAccounts = session.mode === 'accounts' && session.user?.role === 'admin';
   const page =
-    route === '/settings' ? 'settings' : route === '/templates' ? 'templates' : 'projects';
+    route === '/accounts'
+      ? 'accounts'
+      : route === '/settings'
+        ? 'settings'
+        : route === '/templates'
+          ? 'templates'
+          : 'projects';
   return (
     <div className={`app-shell ${projectId ? 'in-editor' : ''}`}>
       <a
@@ -189,6 +288,18 @@ export function App() {
             <Settings2 size={19} />
             模型接入
           </a>
+          {canManageAccounts && (
+            <a
+              className={page === 'accounts' ? 'active' : ''}
+              href="#/accounts"
+              aria-current={page === 'accounts' ? 'page' : undefined}
+              aria-label="账号管理"
+              title="账号管理"
+            >
+              <UsersRound size={19} />
+              账号管理
+            </a>
+          )}
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-note">
@@ -203,22 +314,48 @@ export function App() {
             使用指南
           </Button>
           {session.requiresPassword && (
-            <Button className="nav-button" onClick={logout}>
+            <Button className="nav-button" disabled={loggingOut} onClick={logout}>
               <LogOut size={17} />
-              退出工作台
+              {loggingOut ? '正在退出' : '退出工作台'}
             </Button>
           )}
           <div className="profile">
-            <span>织</span>
+            <span>{Array.from(session.user?.displayName || '织')[0]}</span>
             <div>
-              <strong>我的工作台</strong>
-              <small>ZHIZUO STUDIO</small>
+              <strong title={session.user?.displayName}>
+                {session.user?.displayName || '我的工作台'}
+              </strong>
+              <small title={session.user?.workspace.name}>
+                {session.user?.workspace.name || 'ZHIZUO STUDIO'}
+              </small>
             </div>
             <span className="online-dot" title="已连接" />
           </div>
         </div>
       </aside>
-      <main id="main-content" className="main-content" tabIndex={-1}>
+      {session.requiresPassword && !projectId && (
+        <div className="account-mobile-bar">
+          <div>
+            <strong>{session.user?.displayName || '我的工作台'}</strong>
+            <span>{session.user?.workspace.name || '私有工作空间'}</span>
+          </div>
+          <Button
+            variant="ghost"
+            className="account-mobile-logout"
+            disabled={loggingOut}
+            onClick={logout}
+          >
+            <LogOut size={16} />
+            {loggingOut ? '正在退出' : '退出'}
+          </Button>
+        </div>
+      )}
+      <main
+        key={session.user?.id || session.mode || 'workspace'}
+        id="main-content"
+        className="main-content"
+        tabIndex={-1}
+      >
         <Suspense
           fallback={
             <div className="screen-center">
@@ -230,6 +367,17 @@ export function App() {
             <ProjectEditor key={projectId} id={projectId} notify={notify} />
           ) : page === 'settings' ? (
             <Providers notify={notify} />
+          ) : page === 'accounts' ? (
+            canManageAccounts && session.user ? (
+              <AccountAdmin currentUser={session.user} notify={notify} />
+            ) : (
+              <div className="screen-center">
+                <ErrorBox>此页面仅供工作台管理员管理账号。</ErrorBox>
+                <Button asChild className="button secondary">
+                  <a href="#/">返回我的项目</a>
+                </Button>
+              </div>
+            )
           ) : (
             <Dashboard templatesOnly={page === 'templates'} notify={notify} />
           )}

@@ -22,9 +22,10 @@ export class Repository {
     if (!p) throw new NotFound('项目不存在');
     return p;
   }
-  async create(title: string, brief = EMPTY_BRIEF) {
+  async create(title: string, brief = EMPTY_BRIEF, workspaceId = 'local') {
     const p: Project = {
       id: randomUUID(),
+      workspaceId,
       title,
       brief,
       board: initialBoard(),

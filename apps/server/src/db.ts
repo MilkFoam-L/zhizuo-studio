@@ -4,7 +4,14 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 export type Scope =
-  'projects' | 'assets' | 'versions' | 'tasks' | 'providers' | 'sessions' | 'usage';
+  | 'projects'
+  | 'assets'
+  | 'versions'
+  | 'tasks'
+  | 'providers'
+  | 'sessions'
+  | 'usage'
+  | 'pending_assets';
 export interface Database {
   query<T>(sql: string, params?: unknown[]): Promise<T[]>;
   get<T>(scope: Scope, id: string): Promise<T | undefined>;

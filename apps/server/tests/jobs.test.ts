@@ -140,6 +140,7 @@ async function fixture(
     db,
     repo,
     project,
+    media,
     task,
     runner,
     removed,
@@ -221,6 +222,141 @@ test('cancelled queued tasks are never submitted and repeated cancellation remai
   await f.runner.stop();
   assert.equal(calls, 0);
   assert.equal((await f.db.get<StoredTask>('tasks', f.task.id))!.attempts, 0);
+});
+
+test('unavailable workspaces cancel queued tasks before claim or supplier submission', async (context) => {
+  let calls = 0;
+  const checkedProjects: string[] = [];
+  const f = await fixture(context, {
+    canRunProject: async (projectId) => {
+      checkedProjects.push(projectId);
+      return false;
+    },
+    generateCopy: async () => {
+      calls++;
+      return copy;
+    },
+  });
+  await f.runner.tick();
+  await f.runner.stop();
+  const last = (await f.db.get<StoredTask>('tasks', f.task.id))!;
+  assert.equal(last.status, 'cancelled');
+  assert.equal(last.attempts, 0);
+  assert.match(last.error!, /所属账号或工作空间已不可用/);
+  assert.equal(calls, 0);
+  assert.deepEqual(checkedProjects, [f.project.id]);
+  assert.equal((await f.db.list('versions', f.project.id)).length, 0);
+});
+
+test('account disabled between claim and submission never invokes the supplier', async (context) => {
+  let checks = 0,
+    calls = 0;
+  const f = await fixture(context, {
+    canRunProject: async () => ++checks === 1,
+    generateCopy: async () => {
+      calls++;
+      return copy;
+    },
+  });
+  await f.runner.tick();
+  await until(async () => (await f.status()) === 'cancelled');
+  await f.runner.stop();
+  const last = (await f.db.get<StoredTask>('tasks', f.task.id))!;
+  assert.equal(checks, 2);
+  assert.equal(last.attempts, 1);
+  assert.equal(calls, 0);
+  assert.match(last.error!, /所属账号或工作空间已不可用/);
+  assert.equal((await f.db.list('versions', f.project.id)).length, 0);
+  assert.equal((await f.db.get<{ status: string }>('usage', f.task.id))?.status, 'cancelled');
+});
+
+test('account is checked after reference loading and before image generation', async (context) => {
+  let enabled = true,
+    calls = 0;
+  const f = await fixture(context, {
+    canRunProject: async () => enabled,
+    generateImage: async () => {
+      calls++;
+      return { bytes: Buffer.from('image'), mime: 'image/png' };
+    },
+  });
+  const asset: Asset = {
+    id: randomUUID(),
+    projectId: f.project.id,
+    name: 'reference.png',
+    mime: 'image/png',
+    width: 1,
+    height: 1,
+    size: 1,
+    url: '',
+    thumbnailUrl: '',
+    createdAt: new Date().toISOString(),
+  };
+  f.media.owned = async () => asset;
+  f.media.bytes = async () => {
+    enabled = false;
+    return Buffer.from('reference image');
+  };
+  await f.db.put('tasks', f.task.id, { ...f.task, kind: 'image', referenceAssetId: asset.id });
+  await f.runner.tick();
+  await until(async () => (await f.status()) === 'cancelled');
+  await f.runner.stop();
+  assert.equal(calls, 0);
+  assert.equal(f.ingested(), 0);
+  assert.equal((await f.db.list('versions', f.project.id)).length, 0);
+});
+
+test('disabled workspaces stop saved async recovery without querying or losing the upstream ID', async (context) => {
+  let calls = 0;
+  const f = await fixture(context, {
+    canRunProject: async () => false,
+    generateImage: async () => {
+      calls++;
+      throw new Error('Must not submit');
+    },
+    resumeImage: async () => {
+      calls++;
+      throw new Error('Must not query');
+    },
+  });
+  await f.db.put('tasks', f.task.id, {
+    ...asyncTask(f.task),
+    status: 'running',
+    upstreamTaskId: 'retained-upstream-id',
+    nextRecoveryAt: new Date(Date.now() - 1000).toISOString(),
+  });
+  await f.runner.start();
+  await until(async () => (await f.status()) === 'cancelled');
+  await f.runner.stop();
+  const last = (await f.db.get<StoredTask>('tasks', f.task.id))!;
+  assert.equal(last.upstreamTaskId, 'retained-upstream-id');
+  assert.equal(last.nextRecoveryAt, undefined);
+  assert.equal(last.recoveryStopped, true);
+  assert.match(last.error!, /供应商可能仍在生成并计费/);
+  await f.runner.start();
+  await f.runner.tick();
+  await f.runner.stop();
+  assert.equal(calls, 0);
+  assert.equal(last.attempts, 0);
+  assert.equal((await f.db.list('versions', f.project.id)).length, 0);
+});
+
+test('failed workspace authorization lookup leaves queued work unsubmitted', async (context) => {
+  let calls = 0;
+  const f = await fixture(context, {
+    canRunProject: async () => {
+      throw new Error('Authorization database unavailable');
+    },
+    generateCopy: async () => {
+      calls++;
+      return copy;
+    },
+  });
+  await assert.rejects(f.runner.tick(), /Authorization database unavailable/);
+  await f.runner.stop();
+  assert.equal(calls, 0);
+  assert.equal(await f.status(), 'queued');
+  assert.equal((await f.db.get<StoredTask>('tasks', f.task.id))?.attempts, 0);
 });
 
 test('stop drains a pending task-list read and forbids subsequent claims', async (context) => {

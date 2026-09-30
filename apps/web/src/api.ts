@@ -1,3 +1,26 @@
+export type AccountUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  role: 'admin' | 'member';
+  disabled: boolean;
+  workspace: { id: string; name: string };
+  createdAt: string;
+};
+export type SessionInfo = {
+  authenticated: boolean;
+  requiresPassword: boolean;
+  mode?: 'local' | 'shared' | 'accounts';
+  user?: AccountUser;
+};
+export const SESSION_EXPIRED_EVENT = 'zhizuo:session-expired';
+
+function notifyExpiredSession(path: string, status: number) {
+  if (status === 401 && path.split('?')[0] !== '/session') {
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+  }
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -13,6 +36,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers: { ...(isForm ? {} : { 'Content-Type': 'application/json' }), ...init.headers },
   });
   if (!response.ok) {
+    notifyExpiredSession(path, response.status);
     const data = await response.json().catch(() => ({ error: `请求未完成（${response.status}）` }));
     throw new ApiError(data.error || '请求未完成，请稍后重试', response.status);
   }
@@ -31,8 +55,9 @@ export async function download(path: string, filename: string, init?: RequestIni
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   });
   if (!response.ok) {
+    notifyExpiredSession(path, response.status);
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || '下载失败');
+    throw new ApiError(data.error || '下载失败', response.status);
   }
   const blob = await response.blob();
   saveBlob(blob, filename);

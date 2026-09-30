@@ -2,7 +2,7 @@
 
 面向中文电商与内容创作者的 AI 内容工作台。把商品事实、素材、图文草稿和海报版本放在一张画布中，支持多服务商接入、模板排版和作品导出。
 
-当前处于开发阶段，任务进度见 [docs/TASKS.md](docs/TASKS.md)，已执行的检查与明确缺口见 [docs/VERIFICATION.md](docs/VERIFICATION.md)。平台尺寸是编辑预设，发布前需要核对平台最新规范。
+当前处于开发阶段，任务进度见 [docs/TASKS.md](docs/TASKS.md)，当前账号与存储阶段的验证见 [VERIFICATION-ACCOUNTS-STORAGE.md](docs/VERIFICATION-ACCOUNTS-STORAGE.md)，基础阶段记录见 [VERIFICATION.md](docs/VERIFICATION.md)。平台尺寸是编辑预设，发布前需要核对平台最新规范。
 
 ## 本地启动
 
@@ -34,8 +34,8 @@ npm start
 ## 数据与部署边界
 
 - `DATABASE_URL` 可连接 PostgreSQL；未设置时使用 `.data/db`。
-- 图片写入 `.data/assets`，当前支持单实例磁盘部署。备份需包含 `.data` 和加密密钥；界面可导出不含密钥的项目 ZIP。
-- 私有部署设置 `HOST`、至少 16 字符的 `APP_PASSWORD`、`APP_ORIGIN`，并使用 HTTPS 反向代理。共享密码对应一个私有工作空间，尚不是多租户 SaaS。
+- 素材可使用 `.data/assets` 或 S3 兼容私有存储；当前仍为单 API/worker 实例。备份需要数据库、素材及加密密钥；界面项目 ZIP 不含密钥。
+- 私有部署可用 `AUTH_MODE=shared`（至少 16 字符 `APP_PASSWORD`），或 `AUTH_MODE=accounts`（首次设置 `ADMIN_EMAIL`、`ADMIN_PASSWORD`）。设置 `APP_ORIGIN` 并使用 HTTPS 反向代理。账号模式为每个账号提供隔离的个人空间，管理员可管理账号但不能查看其他账号作品；尚无团队共享和公开注册。
 - 任务记录持久化，进程内最多两个任务并行。服务中断时已开始的任务进入「需要核对」。已保存上游任务编号的异步 JSON 任务可在有限次数与时间内继续 GET 查询；其他协议不会自动重复提交可能收费的请求。
 - 目前不承诺供应商请求的 exactly-once：网络超时可能发生在供应商已接收之后。请核对供应商任务/账单，再决定是否重试。
 - 模型连接探测不调用收费生成接口；异步自定义协议只能通过真实任务验证。供应商兼容性以测试与实际接入记录为准。
@@ -47,3 +47,15 @@ npm start
 ## 界面设计与检查
 
 界面参考与访问边界见 [UI_REFERENCES.md](docs/UI_REFERENCES.md)，基于用户指定设计技能的改动与静态审阅见 [UI_POLISH_REVIEW.md](docs/UI_POLISH_REVIEW.md)。布局采用暖白与深绿的中文内容工作台，正文14–16px，窄屏重排和主要触控控件44px。视觉、键盘和真实浏览器验收状态以验证记录为准。
+
+## 可选账号模式
+
+保持默认配置即可本地使用。启用账号模式时，在你自己的 `.env` 中配置 `AUTH_MODE=accounts`、`ADMIN_EMAIL`、至少12字符的 `ADMIN_PASSWORD` 和 `APP_ORIGIN`。首次启动会创建管理员和个人空间，随后重启不会重置密码；确认能登录后可移除首次管理员密码环境变量。
+
+管理员通过「账号管理」创建成员。每位成员的项目、图片、版本、模型密钥、任务和用量分别隔离；停用账号会撤销会话并停止本地未完成任务。已发送的远端任务不保证被取消或退款。账号与本地模式互切时不会自动转移资料，见 [迁移说明](docs/MIGRATIONS.md)。
+
+## 可选对象存储
+
+安装依赖已包含 AWS 官方 S3 客户端。将 `STORAGE_BACKEND=s3`，并填写 `.env.example` 中 S3 Endpoint、区域、私有桶和服务端凭据；默认 path-style，可按服务商设置关闭。上传和下载仍经过受认证保护的 API，预签名直传暂未实现。
+
+媒体处理有40 MiB单对象上限；新上传先记录 `pending_assets`，启动和每分钟尝试恢复清理。更改桶、前缀或端点不会误清另一位置的残留；也不会自动迁移旧文件。详见 [STORAGE.md](docs/STORAGE.md)。请先导出项目备份，再在独立数据目录验证新后端并导入。
