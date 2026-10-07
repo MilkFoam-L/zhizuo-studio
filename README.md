@@ -2,7 +2,9 @@
 
 面向中文电商与内容创作者的 AI 内容工作台。把商品事实、素材、图文草稿和海报版本放在一张画布中，支持多服务商接入、模板排版和作品导出。
 
-当前处于开发阶段，任务进度见 [docs/TASKS.md](docs/TASKS.md)，当前独立执行与额度阶段的验证见 [VERIFICATION-WORKERS-QUOTAS.md](docs/VERIFICATION-WORKERS-QUOTAS.md)，账号阶段见 [VERIFICATION-ACCOUNTS-STORAGE.md](docs/VERIFICATION-ACCOUNTS-STORAGE.md)，基础阶段记录见 [VERIFICATION.md](docs/VERIFICATION.md)。平台尺寸是编辑预设，发布前需要核对平台最新规范。
+核心能力：AI 生成与手工编辑（文案 / 海报 / 图片节点、版本分支与对比导出）、**品牌资料库**（颜色、语气、禁用词、字体与 Logo 一键应用到项目，见 [BRANDS.md](docs/BRANDS.md)）、**只读分享**（选定版本的限时快照链接，见 [SHARING.md](docs/SHARING.md)）、**团队协作**（邀请成员共享工作空间、多空间切换）、账号安全（自助改密、数据导出、账号删除与审计保留）、独立 worker 与任务额度（数据库租约、任务处理记录时间线、死信人工核对、用量告警与提交限流）。
+
+当前处于开发阶段，任务进度见 [docs/TASKS.md](docs/TASKS.md)，验证记录见 [VERIFICATION-WORKERS-QUOTAS.md](docs/VERIFICATION-WORKERS-QUOTAS.md)、[VERIFICATION-ACCOUNTS-STORAGE.md](docs/VERIFICATION-ACCOUNTS-STORAGE.md)、[VERIFICATION.md](docs/VERIFICATION.md)；平台排版预设版本与官方规范核查状态见 [PLATFORM-RULES.md](docs/PLATFORM-RULES.md)，画布性能基线见 [PERF-BASELINE.md](docs/PERF-BASELINE.md)。平台尺寸是编辑预设，发布前需要核对平台最新规范。
 
 ## 本地启动
 
@@ -31,6 +33,17 @@ npm start
 
 构建后 API 同时提供网页：http://127.0.0.1:4317 。运行目录必须是项目根目录，以便加载字体和静态产物。
 
+## Docker 部署
+
+仓库根目录提供 `compose.yaml` 与 `Dockerfile`，单容器包含 Web、API 与内嵌 worker：
+
+```sh
+cp .env.example .env   # 或自行创建，见下
+docker compose up -d --build
+```
+
+`.env` 至少需要：`AUTH_MODE=shared`、≥16 字符的 `APP_PASSWORD`、64 位十六进制的 `ENCRYPTION_KEY`、`APP_ORIGIN`（对外访问地址）。账号模式改为 `AUTH_MODE=accounts` 并填 `ADMIN_EMAIL` / `ADMIN_PASSWORD`。数据保存在 Docker 卷 `zhizuo-studio_studio-data` 中；升级镜像不会删除该卷，删除卷即清空所有项目数据。服务发布在 `http://127.0.0.1:4317`，生产环境请置于 HTTPS 反向代理之后。
+
 ## 数据与部署边界
 
 - `DATABASE_URL` 可连接 PostgreSQL；未设置时使用 `.data/db`。
@@ -54,9 +67,11 @@ npm start
 
 管理员通过「账号管理」创建成员。每位成员的项目、图片、版本、模型密钥、任务和用量分别隔离；停用账号会撤销会话并停止本地未完成任务。已发送的远端任务不保证被取消或退款。账号与本地模式互切时不会自动转移资料，见 [迁移说明](docs/MIGRATIONS.md)。
 
+账号与团队相关操作：成员可在「团队协作」页自助修改密码、导出全部数据、删除账号；所有者可生成邀请链接（72 小时内有效、可撤销）让已有账号加入工作空间，并随时移除成员（其访问立即失效）。管理员可为成员重置密码、导出数据或永久删除账号。删除前请先导出；额度审计记录按合规要求保留，其余数据不可恢复。
+
 ## 可选对象存储
 
-安装依赖已包含 AWS 官方 S3 客户端。将 `STORAGE_BACKEND=s3`，并填写 `.env.example` 中 S3 Endpoint、区域、私有桶和服务端凭据；默认 path-style，可按服务商设置关闭。上传和下载仍经过受认证保护的 API，预签名直传暂未实现。
+安装依赖已包含 AWS 官方 S3 客户端。将 `STORAGE_BACKEND=s3`，并填写 `.env.example` 中 S3 Endpoint、区域、私有桶和服务端凭据；默认 path-style，可按服务商设置关闭。上传和下载默认仍经受认证保护的 API；S3 后端额外支持**预签名直传与直链下载**（`uploads/presign` 与 `download-url`，带上传租约与有效期，详见 [STORAGE.md](docs/STORAGE.md)）。
 
 媒体处理有40 MiB单对象上限；新上传先记录 `pending_assets`，启动和每分钟尝试恢复清理。更改桶、前缀或端点不会误清另一位置的残留；也不会自动迁移旧文件。详见 [STORAGE.md](docs/STORAGE.md)。请先导出项目备份，再在独立数据目录验证新后端并导入。
 
@@ -73,6 +88,6 @@ npm run start:worker
 
 开发调试可用 `npm run dev:worker`。PGlite 数据目录不可由多个进程同时打开，独立 worker 启动会明确要求 PostgreSQL。此阶段验证一个 API 与多个 worker；没有将其称为任意数量 API 实例的完整横向扩展验收。旧版无租约 worker 必须先停止，禁止与新版本混跑。
 
-「用量与额度」显示按工作空间统计的每日任务额度、预占、消耗和待核对记录，日期使用 Asia/Shanghai。新任务与预占记录在同一事务提交，失败一起回滚。结果未知时保留额度；管理员或本地工作台操作者可写明依据并核对。额度是任务次数，实际供应商费用仍以其账单为准；此功能没有接入收付款。
+「用量与额度」显示按工作空间统计的每日任务额度、预占、消耗和待核对记录，日期使用 Asia/Shanghai。新任务与预占记录在同一事务提交，失败一起回滚。结果未知时保留额度；管理员或本地工作台操作者可写明依据并核对。额度用量越过 80% / 100% 时会写入一次性告警事件；每个用户的任务提交另有滑动窗口限流（`USER_TASK_RATE_PER_MINUTE`，默认每分钟 20 次，超限返回 429）。额度是任务次数，实际供应商费用仍以其账单为准；此功能没有接入收付款。生成任务会记录处理事件（入队、领取、提交检查点、发布、核对、死信等），可在任务面板展开「处理记录」查看时间线；自动查询停止的任务会标示"需人工核对"。
 
 详见 [WORKERS.md](docs/WORKERS.md)、[QUOTAS.md](docs/QUOTAS.md)。连接真实 PostgreSQL 的独立验证命令为 `npm run test:postgres`，要求 `POSTGRES_TEST_URL` 指向 **127.0.0.1** 上名为 `zhizuo_validation` 的专用空闲测试实例，测试会创建/删除自己随机命名的数据库，不接受生产或远端数据库地址。
