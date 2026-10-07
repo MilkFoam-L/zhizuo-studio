@@ -422,7 +422,8 @@ small {
   width: 100%;
   background: transparent;
   border: 0;
-  padding-left: 14px;
+  justify-content: flex-start;
+  padding-left: 15px;
   min-height: 37px;
   font-size: 11px;
 }
