@@ -78,3 +78,9 @@ S3 请求只使用 `PutObject`、`GetObject`、`DeleteObject`，不列举 bucket
 定向运行：`npx tsx --test apps/server/tests/storage.test.ts apps/server/tests/media-storage.test.ts`。当前适配单测 16 项、媒体集成测试 15 项，共 31 项通过；类型检查通过。
 
 这些测试验证适配合同，不证明任何具体供应商已完成接入。发布前仍需用目标服务执行真实上传、读取、缩略图、项目备份与海报导出、删除测试，并记录 endpoint 类型、SDK 版本、path-style 设置、权限策略和故障恢复结果。未完成真实服务测试时，应保留这项验收缺口。
+
+## 预签名直传与下载
+
+配置 S3 后端时，素材上传与下载可选用预签名 URL：`POST /api/projects/:id/uploads/presign` 创建带上传租约的 staging 意图，返回指向 `uploads/<编号>` 对象的短期预签名 PUT（URL 有效期超过数据库租约）；客户端直传后调用 `.../complete`，服务端先核对租约与 token，再走与普通上传完全相同的归一化、引用与提交路径，并清理 staging 对象。`GET /api/assets/:id/download-url` 签发 10 分钟预签名 GET。本地磁盘后端不支持预签名：路由返回明确错误，下载继续使用经归属检查的 API 路由（响应 `mode: 'presigned' | 'api'`）。预签名 URL 不改写大小限制：staging 读取沿用 40 MiB 上限，超限与非法图片在 complete 时被拒绝并保留可清理的 staging 意图。对象存储端点仍要求公共 HTTPS；仅 loopback HTTP（127.0.0.1/localhost）为本地 MinIO 等 S3 兼容服务的隔离验证而放行。
+
+验证：`apps/server/tests/presign.test.ts` 内置一个重算 SigV4 查询签名并校验有效期的 S3 兼容 stub，覆盖直传 PUT/GET 往返、篡改签名拒绝、过期租约与错误 token 拒绝、完成后的 staging 清理与本地回退，共 2 项；全量门禁 `work/presign-final-check.log` 174/174 通过。真实 MinIO 因本机网络不可达（dl.min.io 与各镜像源均被阻断）尚未接入；公开部署验收仍需目标 S3 服务的真实直传、过期与最小权限测试，此项保留为验收缺口。

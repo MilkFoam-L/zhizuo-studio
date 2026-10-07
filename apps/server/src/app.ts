@@ -535,6 +535,33 @@ export async function createApp(options: AppOptions) {
     });
     return a;
   });
+  app.post('/api/projects/:id/uploads/presign', async (req) => {
+    const id = getId(req);
+    await repo.project(id);
+    const b = z.object({ name: z.string().min(1).max(200) }).parse(req.body);
+    return media.createPresignedUpload(id, b.name);
+  });
+  app.post('/api/projects/:id/uploads/presign/:uploadId/complete', async (req) => {
+    const id = getId(req);
+    await repo.project(id);
+    const b = z
+      .object({ token: z.string().uuid(), name: z.string().min(1).max(200) })
+      .parse(req.body);
+    const asset = await media.completePresignedUpload(id, getId(req, 'uploadId'), b.token, b.name);
+    await repo.append(id, {
+      id: asset.id,
+      type: 'content',
+      position: { x: 0, y: 0 },
+      data: { kind: 'asset', label: asset.name, assetId: asset.id },
+    });
+    return asset;
+  });
+  app.get('/api/assets/:id/download-url', async (req) => {
+    const id = getId(req);
+    const asset = await db.get<Asset>('assets', id);
+    if (!asset) throw new NotFound('素材不存在');
+    return media.presignedDownload(id, asset.projectId);
+  });
   app.get('/api/assets/:id/content', async (req, reply) => {
     const id = getId(req);
     if (!(await db.get('assets', id))) throw new NotFound('素材不存在');

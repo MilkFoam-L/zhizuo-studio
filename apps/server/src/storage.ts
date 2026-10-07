@@ -4,6 +4,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -11,11 +12,17 @@ import path from 'node:path';
 
 export const MAX_STORED_BYTES = 40 * 1024 * 1024;
 
+export interface PresignedTarget {
+  url: string;
+  expiresAt: string;
+}
 export interface BlobStorage {
   readonly identity: string;
   put(key: string, body: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<Buffer>;
   remove(key: string): Promise<void>;
+  /** Presigned direct transfer is opt-in per backend; local disk never offers it. */
+  presign?(key: string, ttlSeconds: number, method: 'put' | 'get'): Promise<PresignedTarget>;
   close?(): void;
 }
 
@@ -53,6 +60,13 @@ function validateKey(key: string) {
       key,
     )
   )
+    throw new StorageError('INVALID_KEY');
+}
+
+// Presigned staging objects live under uploads/ and never become assets directly.
+export const stagingKeyPattern = /^uploads\/[a-f0-9-]{36}$/;
+function validateStagingKey(key: string) {
+  if (typeof key !== 'string' || !stagingKeyPattern.test(key))
     throw new StorageError('INVALID_KEY');
 }
 
@@ -210,9 +224,14 @@ function validateConfig(input: S3StorageConfig) {
     if (typeof input.endpoint !== 'string' || /[\s\\?#]/.test(input.endpoint))
       throw new StorageError('CONFIG_ERROR');
     const endpoint = new URL(input.endpoint);
+    // Public endpoints must be HTTPS. Loopback HTTP stays allowed so a local
+    // S3-compatible service (for example MinIO) can be validated in isolation.
+    const loopbackHttp =
+      endpoint.protocol === 'http:' &&
+      ['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname);
     const prefix = (input.prefix ?? 'zhizuo/assets').replace(/\/$/, '');
     if (
-      endpoint.protocol !== 'https:' ||
+      (endpoint.protocol !== 'https:' && !loopbackHttp) ||
       endpoint.username ||
       endpoint.password ||
       endpoint.search ||
@@ -347,6 +366,33 @@ export class S3Storage implements BlobStorage {
     return `${this.prefix}/${key}`;
   }
 
+  // Asset objects and upload-staging objects share one prefix namespace.
+  private objectKeyFor(key: string) {
+    return key.startsWith('uploads/') ? this.stagingObjectKey(key) : this.objectKey(key);
+  }
+
+  private stagingObjectKey(key: string) {
+    validateStagingKey(key);
+    return `${this.prefix}/${key}`;
+  }
+
+  async presign(key: string, ttlSeconds: number, method: 'put' | 'get'): Promise<PresignedTarget> {
+    const ttl = Math.min(Math.max(Math.floor(ttlSeconds), 30), 3600);
+    const objectKey = this.objectKeyFor(key);
+    const command =
+      method === 'put'
+        ? new PutObjectCommand({ Bucket: this.bucket, Key: objectKey })
+        : new GetObjectCommand({ Bucket: this.bucket, Key: objectKey });
+    try {
+      if (!this.client) throw new StorageError('IO_ERROR');
+      const url = await getSignedUrl(this.client, command, { expiresIn: ttl });
+      return { url, expiresAt: new Date(Date.now() + ttl * 1000).toISOString() };
+    } catch (error) {
+      if (error instanceof StorageError) throw error;
+      throw new StorageError('IO_ERROR');
+    }
+  }
+
   async put(key: string, body: Buffer, contentType: string): Promise<void> {
     validateBody(key, body, contentType);
     try {
@@ -366,7 +412,7 @@ export class S3Storage implements BlobStorage {
   }
 
   async get(key: string): Promise<Buffer> {
-    const objectKey = this.objectKey(key);
+    const objectKey = this.objectKeyFor(key);
     try {
       const result = await this.send(new GetObjectCommand({ Bucket: this.bucket, Key: objectKey }));
       return await boundedBody(result.Body, result.ContentLength);
@@ -378,7 +424,7 @@ export class S3Storage implements BlobStorage {
   }
 
   async remove(key: string): Promise<void> {
-    const objectKey = this.objectKey(key);
+    const objectKey = this.objectKeyFor(key);
     try {
       await this.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: objectKey }));
     } catch (error) {

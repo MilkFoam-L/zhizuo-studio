@@ -28,6 +28,8 @@ export interface PendingAsset {
   cleanupToken?: string;
   cleanupLeaseExpiresAt?: string;
   cleanupCompleteAt?: string;
+  /** Set for presigned direct uploads; the object key that the client PUTs to. */
+  stagingKey?: string;
 }
 
 export interface MediaExecution {
@@ -87,6 +89,113 @@ export class Media {
     );
     this.uploads.add(upload);
     return upload;
+  }
+
+  supportsPresign(): boolean {
+    return typeof this.storage.presign === 'function';
+  }
+
+  /**
+   * Presigned direct upload: a short-lived staging intent bounds the client PUT,
+   * while normalization and the authoritative asset commit stay server-side.
+   */
+  async createPresignedUpload(
+    projectId: string,
+    name: string,
+  ): Promise<{
+    uploadId: string;
+    token: string;
+    uploadUrl: string;
+    expiresAt: string;
+    leaseExpiresAt: string;
+  }> {
+    if (this.closing) throw new Error('素材服务正在关闭');
+    if (!this.storage.presign) throw new Error('当前存储后端不支持预签名直传，请使用普通上传');
+    const id = randomUUID();
+    const stagingKey = `uploads/${id}`;
+    const token = randomUUID();
+    const createdAt = new Date().toISOString();
+    await this.db.transaction(async () => {
+      await this.db.put('pending_assets', id, {
+        id,
+        projectId,
+        storageIdentity: this.storage.identity,
+        createdAt,
+        uploadOwner: this.owner,
+        uploadToken: token,
+        phase: 'uploading',
+        stagingKey,
+      } satisfies PendingAsset);
+      await this.db.query(
+        `UPDATE documents SET body=body || jsonb_build_object('leaseExpiresAt', clock_timestamp() + ($2::double precision * interval '1 millisecond'))
+         WHERE scope='pending_assets' AND id=$1`,
+        [id, this.leaseDurationMs],
+      );
+    });
+    // The URL must outlive the database lease so the client can finish the PUT.
+    const target = await this.storage.presign(
+      stagingKey,
+      Math.floor(this.leaseDurationMs / 1000) + 120,
+      'put',
+    );
+    const [lease] = await this.db.query<{ body: PendingAsset }>(
+      "SELECT body FROM documents WHERE scope='pending_assets' AND id=$1",
+      [id],
+    );
+    return {
+      uploadId: id,
+      token,
+      uploadUrl: target.url,
+      expiresAt: target.expiresAt,
+      leaseExpiresAt: lease?.body.leaseExpiresAt ?? createdAt,
+    };
+  }
+
+  async completePresignedUpload(
+    projectId: string,
+    uploadId: string,
+    token: string,
+    name: string,
+  ): Promise<Asset> {
+    const valid = await this.pendingLocked(uploadId, async (pending) => {
+      if (
+        !pending ||
+        pending.uploadToken !== token ||
+        pending.phase !== 'uploading' ||
+        !pending.stagingKey ||
+        pending.projectId !== projectId
+      )
+        return false;
+      const rows = await this.db.query<{ id: string }>(
+        `SELECT id FROM documents WHERE scope='pending_assets' AND id=$1
+         AND (body->>'leaseExpiresAt')::timestamptz > clock_timestamp()`,
+        [uploadId],
+      );
+      return rows.length > 0;
+    });
+    if (!valid) throw new Error('上传会话已过期或不存在，请重新发起上传');
+    const staged = await this.storage.get(`uploads/${uploadId}`);
+    if (!staged.length) throw new Error('尚未收到上传的文件，请完成上传后再登记');
+    // Normalization, lease and reference rules are identical to ordinary uploads.
+    const asset = await this.ingest(projectId, staged, name);
+    await this.pendingLocked(uploadId, async (pending) => {
+      if (pending?.uploadToken === token) await this.db.remove('pending_assets', uploadId);
+    }).catch(() => {});
+    await this.storage.remove(`uploads/${uploadId}`).catch(() => {});
+    return asset;
+  }
+
+  async presignedDownload(
+    id: string,
+    projectId: string,
+  ): Promise<{ url: string; mode: 'presigned' | 'api'; expiresAt?: string }> {
+    await this.owned(id, projectId);
+    if (this.storage.presign) {
+      const target = await this.storage.presign(`${id}.png`, 600, 'get');
+      return { url: target.url, mode: 'presigned', expiresAt: target.expiresAt };
+    }
+    // Local storage keeps serving downloads through the authorized API route.
+    return { url: `/api/assets/${id}/content`, mode: 'api' };
   }
 
   async close() {
@@ -277,7 +386,8 @@ export class Media {
     });
     if (claim !== 'claimed') return claim;
     try {
-      await this.removeObjects(id);
+      const pending = await this.db.get<PendingAsset>('pending_assets', id);
+      await this.removeObjects(id, pending?.stagingKey);
       await this.pendingLocked(id, async (pending) => {
         if (!pending || pending.cleanupToken !== token) return;
         if (pending.uploadStopped || !pending.uploadToken) {
@@ -328,11 +438,13 @@ export class Media {
     this.filename(id);
     return this.storage.get(`${id}.thumb.webp`);
   }
-  private async removeObjects(id: string) {
-    const removed = await Promise.allSettled([
+  private async removeObjects(id: string, stagingKey?: string) {
+    const targets: Promise<unknown>[] = [
       this.storage.remove(`${id}.png`),
       this.storage.remove(`${id}.thumb.webp`),
-    ]);
+    ];
+    if (stagingKey) targets.push(this.storage.remove(stagingKey));
+    const removed = await Promise.allSettled(targets);
     for (const result of removed) if (result.status === 'rejected') throw result.reason;
   }
   async remove(id: string) {

@@ -257,7 +257,7 @@ test('S3 prefixes isolate deployments sharing a bucket without listing or bulk d
 test('S3 administrator configuration validates HTTPS and hides invalid configuration values', () => {
   const badConfigs = [
     { endpoint: 'http://storage.example.com' },
-    { endpoint: 'http://127.0.0.1:9000' },
+    { endpoint: 'http://192.168.1.10:9000' },
     { endpoint: 'https://user:private-secret-key@storage.example.com' },
     { endpoint: 'https://storage.example.com?key=private-secret-key' },
     { endpoint: 'https://storage.example.com#private-secret-key' },
