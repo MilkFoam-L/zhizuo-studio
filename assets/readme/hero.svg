@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="hero-title hero-desc">
+  <title id="hero-title">织作 ZhiZuo Studio</title>
+  <desc id="hero-desc">面向中文电商与内容创作者的 AI 内容工作台：一张画布承载商品事实、素材、图文草稿与海报版本。左侧为项目名与说明，右侧为画布节点编排示意。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f3d33"/>
+      <stop offset="1" stop-color="#244b3c"/>
+    </linearGradient>
+    <linearGradient id="poster" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7efe0"/>
+      <stop offset="1" stop-color="#efdfc6"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="360" rx="26" fill="url(#bg)"/>
+  <g id="title-block" transform="translate(64 52)">
+    <text font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="21" fill="#d8c9a6" letter-spacing="6">ZHIZUO CREATIVE STUDIO</text>
+    <text y="86" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="72" font-weight="700" fill="#f4e6d6">织作 <tspan fill="#cfe0d2" font-size="40" font-weight="500">ZhiZuo Studio</tspan></text>
+    <text y="146" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="27" fill="#e8dfcd">面向中文电商与内容创作者的 AI 内容工作台</text>
+    <text y="188" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="22" fill="#b8c9ba">商品事实 → 图文草稿 → 可编辑海报 → 版本对比 → 导出发布素材</text>
+    <g id="meta" transform="translate(0 228)" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="19" fill="#9db3a0">
+      <text x="0">画布编排</text>
+      <text x="118">·</text>
+      <text x="140">多服务商 AI 接入</text>
+      <text x="330">·</text>
+      <text x="352">品牌资料库</text>
+      <text x="518">·</text>
+      <text x="540">团队协作</text>
+      <text x="690">·</text>
+      <text x="712">任务额度</text>
+    </g>
+  </g>
+  <g id="canvas-proof" transform="translate(790 46)" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif">
+    <!-- 连线 -->
+    <path d="M 60 74 C 110 74 120 128 170 128" stroke="#6f8a77" stroke-width="2.5" fill="none"/>
+    <path d="M 262 128 C 310 128 316 66 366 66" stroke="#6f8a77" stroke-width="2.5" fill="none" stroke-dasharray="6 5"/>
+    <path d="M 170 156 C 220 156 226 214 272 214" stroke="#6f8a77" stroke-width="2.5" fill="none"/>
+    <!-- brief 节点 -->
+    <rect x="6" y="46" width="112" height="56" rx="12" fill="#2e5443" stroke="#7fa087" stroke-width="1.5"/>
+    <text x="62" y="80" text-anchor="middle" font-size="20" fill="#e8dfcd">商品事实</text>
+    <!-- poster 节点（主视觉） -->
+    <rect x="366" y="10" width="96" height="112" rx="10" fill="url(#poster)" stroke="#d8c9a6" stroke-width="2"/>
+    <rect x="380" y="26" width="52" height="9" rx="4" fill="#244b3c"/>
+    <rect x="380" y="44" width="68" height="13" rx="4" fill="#202721"/>
+    <rect x="380" y="66" width="60" height="8" rx="4" fill="#8a8474"/>
+    <rect x="380" y="98" width="30" height="10" rx="3" fill="#b4552d"/>
+    <text x="414" y="142" text-anchor="middle" font-size="18" fill="#d8c9a6">可编辑海报</text>
+    <!-- asset 节点 -->
+    <rect x="170" y="100" width="92" height="56" rx="12" fill="#2e5443" stroke="#7fa087" stroke-width="1.5"/>
+    <rect x="184" y="112" width="26" height="32" rx="6" fill="#d8c9a6"/>
+    <text x="226" y="134" font-size="18" fill="#e8dfcd">素材</text>
+    <!-- copy 节点 -->
+    <rect x="272" y="188" width="120" height="52" rx="12" fill="#2e5443" stroke="#7fa087" stroke-width="1.5"/>
+    <text x="332" y="220" text-anchor="middle" font-size="18" fill="#e8dfcd">图文草稿</text>
+    <!-- 版本分支 -->
+    <circle cx="150" cy="252" r="8" fill="#f4e6d6"/>
+    <circle cx="206" cy="252" r="8" fill="none" stroke="#d8c9a6" stroke-width="2.5"/>
+    <path d="M 158 252 L 196 252" stroke="#d8c9a6" stroke-width="2.5"/>
+    <text x="228" y="258" font-size="18" fill="#b8c9ba">版本对比 · 导出</text>
+  </g>
+</svg>

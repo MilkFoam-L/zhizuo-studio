@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="110" viewBox="0 0 1200 110" role="img" aria-labelledby="s-deploy">
+  <title id="s-deploy">部署与运维</title>
+  <desc id="s-deploy-d">部署与运维：本地 · Docker · PostgreSQL · S3</desc>
+  <rect width="1200" height="110" rx="18" fill="#f4e6d6"/>
+  <rect x="0" y="0" width="10" height="110" rx="5" fill="#244b3c"/>
+  <text x="52" y="46" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="16" fill="#8a7a58" letter-spacing="5">DEPLOY &amp; OPERATE</text>
+  <text x="52" y="88" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="42" font-weight="700" fill="#244b3c">部署与运维</text>
+  <text x="1148" y="66" text-anchor="end" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="20" fill="#a08f68">本地 · Docker · PostgreSQL · S3</text>
+</svg>
