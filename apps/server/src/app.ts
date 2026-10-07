@@ -17,6 +17,8 @@ import { publicTask, publicProvider, type StoredProvider, type StoredTask } from
 import { validateProviderInput, encryptSecret, decryptSecret, testConnection } from './providers';
 import { boardSchema, briefSchema, copySchema, posterSchema } from './validation';
 import { backup, restore } from './backup';
+import { BrandService, brandInputSchema } from './brands';
+import { ShareService } from './shares';
 
 export interface AppOptions extends RuntimeOptions {
   origin?: string;
@@ -31,7 +33,9 @@ const plainProvider = (p: StoredProvider) => {
 };
 export async function createApp(options: AppOptions) {
   const runtime = await createRuntime(options);
-  const { db, repo, media, runner, accounts, quotas, mode, key } = runtime;
+  const { db, repo, media, runner, accounts, quotas, mode, key, canRunProject } = runtime;
+  const brands = new BrandService(db, media, repo);
+  const shares = new ShareService(db, media, key!, canRunProject);
   const identities = new WeakMap<FastifyRequest, PublicAccount>();
   const workspace = (req: FastifyRequest) => identities.get(req)?.workspace.id ?? 'local';
   const ownedProject = async (req: FastifyRequest, id: string) => {
@@ -142,7 +146,14 @@ export async function createApp(options: AppOptions) {
         const user = await accounts.session(req.cookies.zhizuo_session);
         if (user) identities.set(req, user);
       }
-      if (!['/api/session', '/api/health'].includes(route)) {
+      if (
+        ![
+          '/api/session',
+          '/api/health',
+          '/api/public-shares',
+          '/api/public-shares/versions/:id/preview',
+        ].includes(route)
+      ) {
         if (accounts ? !identities.has(req) : !(await isAuthenticated(req.cookies.zhizuo_session)))
           return reply.code(401).send({ error: '请先登录工作台' });
         if (
@@ -339,6 +350,16 @@ export async function createApp(options: AppOptions) {
         )
       )
         throw new Error('画布引用了不属于当前项目的素材或版本');
+      const taskIds = new Set((await db.list<StoredTask>('tasks', projectId)).map((t) => t.id));
+      for (const n of b.board.nodes) {
+        if (n.data.kind === 'generation' && n.data.taskId && !taskIds.has(n.data.taskId))
+          throw new Error('画布引用了不属于当前项目的生成任务');
+        if (
+          n.data.taskSnapshot?.resultVersionId &&
+          !versionIds.has(n.data.taskSnapshot.resultVersionId)
+        )
+          throw new Error('画布任务快照引用了不属于当前项目的版本');
+      }
     }
     const { revision, ...patch } = b;
     return repo.update(getId(req), revision, patch);
@@ -387,6 +408,39 @@ export async function createApp(options: AppOptions) {
       decryptSecret(p.secret, key!),
       AbortSignal.timeout(15_000),
     );
+  });
+  const brandUpdateSchema = brandInputSchema.extend({ revision: z.number().int().positive() });
+  app.get('/api/brands', async (req) => {
+    const archived = z
+      .object({ archived: z.enum(['true', 'false']).optional() })
+      .parse(req.query ?? {});
+    return brands.list(workspace(req), archived.archived === 'true');
+  });
+  app.post('/api/brands', async (req) =>
+    brands.create(workspace(req), brandInputSchema.parse(req.body)),
+  );
+  app.get('/api/brands/:id', async (req) => brands.get(getId(req), workspace(req)));
+  app.put('/api/brands/:id', async (req) => {
+    const { revision, ...input } = brandUpdateSchema.parse(req.body);
+    return brands.update(getId(req), workspace(req), revision, input);
+  });
+  app.patch('/api/brands/:id/archive', async (req) => {
+    const b = z.object({ archived: z.boolean() }).parse(req.body);
+    return brands.setArchived(getId(req), workspace(req), b.archived);
+  });
+  app.post('/api/brands/:id/logo', async (req) => {
+    const f = await req.file();
+    if (!f) throw new Error('请选择 Logo 图片');
+    return brands.uploadLogo(getId(req), workspace(req), await f.toBuffer(), f.filename);
+  });
+  app.get('/api/brands/:id/logo', async (req, reply) =>
+    reply.type('image/png').send(await brands.logo(getId(req), workspace(req))),
+  );
+  app.post('/api/projects/:id/apply-brand', async (req) => {
+    const b = z
+      .object({ brandId: z.string().uuid(), revision: z.number().int().positive() })
+      .parse(req.body);
+    return brands.apply(b.brandId, workspace(req), getId(req), b.revision);
   });
   app.post('/api/projects/:id/assets', async (req) => {
     const id = getId(req);
@@ -473,6 +527,23 @@ export async function createApp(options: AppOptions) {
           `INSERT INTO documents(scope,id,body) VALUES('tasks',$1,$2::jsonb) ON CONFLICT DO NOTHING RETURNING id`,
           [t.id, JSON.stringify(t)],
         );
+        if (inserted.length)
+          // Generation node is created in the same transaction as the task and its quota
+          // reservation, so the board never references a task that failed to enqueue.
+          await repo.append(
+            id,
+            {
+              id: `task-${t.id}`,
+              type: 'content',
+              position: { x: 0, y: 0 },
+              data: {
+                kind: 'generation',
+                label: b.kind === 'copy' ? '文案生成任务' : '图片生成任务',
+                taskId: t.id,
+              },
+            },
+            'brief',
+          );
         return publicTask(inserted.length ? t : (await db.get<StoredTask>('tasks', t.id))!);
       }),
     ),
@@ -497,6 +568,7 @@ export async function createApp(options: AppOptions) {
     if ((b.kind === 'copy' && !b.copy) || (b.kind === 'poster' && !b.poster))
       throw new Error('版本缺少对应内容');
     if (b.poster?.assetId) await media.owned(b.poster.assetId, projectId);
+    if (b.poster?.logoAssetId) await media.owned(b.poster.logoAssetId, projectId);
     if (
       b.parentVersionId &&
       (await db.get<ContentVersion>('versions', b.parentVersionId))?.projectId !== projectId
@@ -566,6 +638,36 @@ export async function createApp(options: AppOptions) {
     if (!v?.poster) throw new NotFound('海报版本不存在');
     return reply.type('image/png').send(await media.render(v.poster, v.projectId));
   });
+  const shareToken = (req: FastifyRequest) => {
+    const token = req.headers['x-share-token'];
+    return Array.isArray(token) ? token[0] : token;
+  };
+  const publicShareHeaders = (reply: {
+    header: (
+      name: string,
+      value: string,
+    ) => {
+      header: (name: string, value: string) => unknown;
+    };
+  }) => {
+    reply.header('Referrer-Policy', 'no-referrer').header('X-Robots-Tag', 'noindex,nofollow');
+    return reply;
+  };
+  app.get('/api/projects/:id/shares', async (req) => shares.list(getId(req), workspace(req)));
+  app.post('/api/projects/:id/shares', async (req) =>
+    shares.create(getId(req), workspace(req), req.body),
+  );
+  app.post('/api/projects/:id/shares/:shareId/revoke', async (req) =>
+    shares.revoke(getId(req), workspace(req), getId(req, 'shareId')),
+  );
+  app.get('/api/public-shares', async (req, reply) => {
+    publicShareHeaders(reply);
+    return shares.read(shareToken(req) ?? '');
+  });
+  app.get('/api/public-shares/versions/:id/preview', async (req, reply) => {
+    publicShareHeaders(reply);
+    return reply.type('image/png').send(await shares.preview(shareToken(req) ?? '', getId(req)));
+  });
   app.post('/api/exports', async (req, reply) => {
     const b = z
       .object({
@@ -575,6 +677,8 @@ export async function createApp(options: AppOptions) {
       })
       .parse(req.body);
     await ownedProject(req, b.projectId);
+    const exportProject = await repo.project(b.projectId);
+    const exportBanned = exportProject.brief.bannedTerms;
     const files: Record<string, Uint8Array> = {};
     const manifest: { id: string; label: string; warnings: string[] }[] = [];
     let total = 0;
@@ -582,7 +686,7 @@ export async function createApp(options: AppOptions) {
       const v = await db.get<ContentVersion>('versions', id);
       if (!v || v.projectId !== b.projectId) throw new Error('导出版本不属于当前项目');
       const prefix = `${String(i + 1).padStart(2, '0')}-${v.kind}`;
-      const warnings = contentWarnings(JSON.stringify(v.copy ?? v.poster ?? ''));
+      const warnings = contentWarnings(JSON.stringify(v.copy ?? v.poster ?? ''), exportBanned);
       if (v.poster) {
         warnings.push(...layoutPoster(v.poster).warnings);
         files[`${prefix}.png`] = await media.render(v.poster, v.projectId);

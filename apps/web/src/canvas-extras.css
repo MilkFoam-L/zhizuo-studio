@@ -1,0 +1,212 @@
+.canvas-group {
+  width: 100%;
+  height: 100%;
+  border: 2px solid var(--node-color, #cbd9c5);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--node-color, #cbd9c5) 16%, transparent);
+}
+.canvas-group.node-selected {
+  outline: 2px solid #496a50;
+  outline-offset: 3px;
+}
+.group-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 12px 20px;
+  color: #344d3b;
+  cursor: grab;
+}
+.group-heading strong {
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-heading span {
+  font-size: 14px;
+  margin-left: auto;
+}
+.canvas-group .group-resize-handle {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: color-mix(in srgb, #244b3c 20%, transparent);
+  border: 2px solid #244b3c;
+}
+.node-note,
+.node-task {
+  padding: 18px;
+  color: #344538;
+}
+.node-note h3 {
+  font-size: 16px;
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.node-note p,
+.node-task p {
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow: auto;
+  margin: 12px 0;
+}
+.node-note .text-button,
+.node-task .text-button {
+  min-height: 44px;
+  font-size: 14px;
+}
+.annotation-state,
+.canvas-task-status {
+  display: inline-flex;
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 14px;
+  background: #fff0ce;
+  color: #704f11;
+}
+.annotation-state.resolved,
+.canvas-task-status.task-succeeded {
+  background: #e2efde;
+  color: #385737;
+}
+.canvas-task-status.task-failed,
+.canvas-task-status.task-reconciling {
+  background: #fff0e9;
+  color: #984728;
+}
+.canvas-task-status.task-cancelled,
+.canvas-task-status.task-history {
+  background: #edf0eb;
+  color: #596056;
+}
+.canvas-task-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.canvas-node-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e0e6dc;
+}
+.canvas-node-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+}
+.canvas-node-editor .color-field {
+  flex-direction: row;
+  align-items: center;
+}
+.canvas-node-editor input[type='color'] {
+  width: 48px;
+  height: 44px;
+}
+.canvas-node-editor select {
+  min-height: 44px;
+}
+.canvas-node-editor .group-size-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.canvas-node-editor .hint {
+  margin: 0;
+}
+.canvas-task-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.edge-inspector {
+  position: absolute;
+  z-index: 6;
+  top: 16px;
+  right: 16px;
+  width: min(270px, calc(100% - 32px));
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #d7e1d2;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px #26382c18;
+}
+.edge-inspector label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+}
+.edge-inspector select {
+  min-height: 44px;
+}
+.edge-inspector p {
+  font-size: 14px;
+  color: #64705f;
+  margin: 10px 0;
+}
+.edge-inspector .text-button {
+  min-height: 44px;
+}
+.brand-terms-hint {
+  padding: 12px;
+  background: #fff5de;
+  border-radius: 8px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.editor-toolbar > div {
+  flex-wrap: wrap;
+}
+@media (max-width: 1100px) {
+  .editor-toolbar {
+    flex-wrap: wrap;
+  }
+  .editor-toolbar > div {
+    min-width: 0;
+  }
+  .editor-header-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+@media (max-width: 600px) {
+  .editor-toolbar > div:first-child {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .editor-toolbar .toolbar-button {
+    min-width: 0;
+    padding: 8px 4px;
+    min-height: 64px;
+    flex-direction: column;
+    white-space: normal;
+    gap: 5px;
+    font-size: 14px;
+  }
+  .editor-toolbar .toolbar-button > span {
+    display: inline;
+  }
+  .editor-toolbar .toolbar-divider {
+    display: none;
+  }
+  .editor-toolbar > div:last-child {
+    display: flex;
+    justify-content: flex-end;
+  }
+  .editor-header-actions .button {
+    min-height: 44px;
+    font-size: 14px;
+  }
+}

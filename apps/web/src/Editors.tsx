@@ -16,10 +16,12 @@ import { ErrorBox, Modal, Spinner, Tag } from './ui';
 import { message } from './api';
 export function CopyEditor({
   version,
+  bannedTerms,
   onClose,
   onSave,
 }: {
   version?: ContentVersion;
+  bannedTerms?: string[];
   onClose: () => void;
   onSave: (copy: CopyDraft, label: string, parentId?: string) => Promise<void>;
 }) {
@@ -33,6 +35,7 @@ export function CopyEditor({
   const [error, setError] = useState('');
   const warnings = contentWarnings(
     `${copy.titles.join(' ')} ${copy.body} ${copy.pages.map((p) => `${p.headline} ${p.body}`).join(' ')}`,
+    bannedTerms,
   );
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -248,6 +251,8 @@ export function PosterPreview({
 }) {
   const layout = useMemo(() => layoutPoster(poster), [poster]);
   const asset = assets.find((a) => a.id === poster.assetId);
+  const fontFamily =
+    poster.fontFamily === 'serif' ? 'Noto Serif SC,serif' : 'Noto Sans SC,sans-serif';
   return (
     <svg
       className="poster-svg"
@@ -264,6 +269,16 @@ export function PosterPreview({
           y={poster.imageBox.y}
           width={poster.imageBox.width}
           height={poster.imageBox.height}
+          preserveAspectRatio="xMidYMid meet"
+        />
+      ) : null}
+      {poster.logoAssetId && poster.logoBox ? (
+        <image
+          href={`/api/assets/${poster.logoAssetId}/content`}
+          x={poster.logoBox.x}
+          y={poster.logoBox.y}
+          width={poster.logoBox.width}
+          height={poster.logoBox.height}
           preserveAspectRatio="xMidYMid meet"
         />
       ) : null}
@@ -291,7 +306,7 @@ export function PosterPreview({
           key={line.id}
           x={line.x}
           y={line.y}
-          fontFamily="Noto Sans SC,sans-serif"
+          fontFamily={fontFamily}
           fontSize={line.fontSize}
           fontWeight={line.fontWeight}
           fill={line.color}
@@ -381,6 +396,87 @@ export function PosterEditor({
               ))}
             </select>
           </Label>
+          <Label>
+            海报字体
+            <select
+              value={poster.fontFamily ?? 'sans'}
+              onChange={(e) =>
+                setPoster((p) => ({ ...p, fontFamily: e.target.value as Poster['fontFamily'] }))
+              }
+            >
+              <option value="sans">思源黑体</option>
+              <option value="serif">思源宋体</option>
+            </select>
+          </Label>
+          {poster.logoAssetId && poster.logoBox && (
+            <>
+              <div className="inline-heading">
+                <h3>品牌 Logo</h3>
+              </div>
+              <div className="form-grid compact">
+                <Label>
+                  Logo X
+                  <Input
+                    type="number"
+                    min={0}
+                    max={poster.width}
+                    value={poster.logoBox.x}
+                    onChange={(e) =>
+                      setPoster((p) => ({
+                        ...p,
+                        logoBox: p.logoBox && { ...p.logoBox, x: Number(e.target.value) },
+                      }))
+                    }
+                  />
+                </Label>
+                <Label>
+                  Logo Y
+                  <Input
+                    type="number"
+                    min={0}
+                    max={poster.height}
+                    value={poster.logoBox.y}
+                    onChange={(e) =>
+                      setPoster((p) => ({
+                        ...p,
+                        logoBox: p.logoBox && { ...p.logoBox, y: Number(e.target.value) },
+                      }))
+                    }
+                  />
+                </Label>
+                <Label>
+                  Logo 宽
+                  <Input
+                    type="number"
+                    min={24}
+                    max={poster.width}
+                    value={poster.logoBox.width}
+                    onChange={(e) =>
+                      setPoster((p) => ({
+                        ...p,
+                        logoBox: p.logoBox && { ...p.logoBox, width: Number(e.target.value) },
+                      }))
+                    }
+                  />
+                </Label>
+                <Label>
+                  Logo 高
+                  <Input
+                    type="number"
+                    min={24}
+                    max={poster.height}
+                    value={poster.logoBox.height}
+                    onChange={(e) =>
+                      setPoster((p) => ({
+                        ...p,
+                        logoBox: p.logoBox && { ...p.logoBox, height: Number(e.target.value) },
+                      }))
+                    }
+                  />
+                </Label>
+              </div>
+            </>
+          )}
           <Label className="color-field">
             背景颜色
             <input

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Board, Brief, Project, ProjectDetail } from '../../../packages/shared/src/index';
 import { api, ApiError, json, message, saveBlob } from './api';
+import { cleanBoard, mergeBoards, mergeProjectFields, orderedNodes } from './canvas-helpers';
 export type SaveState = 'saved' | 'pending' | 'saving' | 'error' | 'conflict';
 type LocalDraft = {
   revision: number;
@@ -8,6 +9,8 @@ type LocalDraft = {
   brief: Brief;
   board: Board;
   baseBoard?: Board;
+  baseBrief?: Brief;
+  baseTitle?: string;
 };
 function removeDraft(key: string) {
   try {
@@ -16,20 +19,7 @@ function removeDraft(key: string) {
     /* Saving on the server remains successful when browser storage is disabled. */
   }
 }
-const copyBoard = (b: Board) => JSON.parse(JSON.stringify(b)) as Board;
-function cleanBoard(b: Board): Board {
-  return {
-    schemaVersion: 1,
-    nodes: b.nodes.map((n) => ({ id: n.id, type: 'content', position: n.position, data: n.data })),
-    edges: b.edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      ...(e.label ? { label: e.label } : {}),
-    })),
-    viewport: b.viewport,
-  };
-}
+const copyBoard = (b: Board) => structuredClone(cleanBoard(b));
 export function useProject(id: string) {
   const [detail, setDetail] = useState<ProjectDetail>();
   const [loading, setLoading] = useState(true);
@@ -40,6 +30,8 @@ export function useProject(id: string) {
   const current = useRef<LocalDraft | undefined>(undefined);
   const server = useRef<Project | undefined>(undefined);
   const baseBoard = useRef<Board | undefined>(undefined);
+  const baseBrief = useRef<Brief | undefined>(undefined);
+  const baseTitle = useRef<string | undefined>(undefined);
   const change = useRef(0);
   const saved = useRef(0);
   const saving = useRef<Promise<boolean> | null>(null);
@@ -57,8 +49,11 @@ export function useProject(id: string) {
           key,
           JSON.stringify({
             ...current.current,
-            baseBoard: baseBoard.current,
-            revision: server.current?.revision ?? current.current.revision,
+            board: cleanBoard(current.current.board),
+            baseBoard: baseBoard.current ? cleanBoard(baseBoard.current) : undefined,
+            baseBrief: baseBrief.current,
+            baseTitle: baseTitle.current,
+            revision: current.current.revision,
           }),
         );
       } catch {
@@ -91,10 +86,19 @@ export function useProject(id: string) {
         );
         server.current = updated;
         baseBoard.current = snapshot.board;
+        baseBrief.current = updated.brief;
+        baseTitle.current = updated.title;
         saved.current = stamp;
-        if (current.current) current.current = { ...current.current, revision: updated.revision };
+        if (current.current)
+          current.current = {
+            ...current.current,
+            revision: updated.revision,
+            baseBrief: updated.brief,
+            baseTitle: updated.title,
+          };
         if (live.current) {
           setDetail((d) => (d ? { ...d, project: updated } : d));
+          setDraft(current.current);
           setSaveError('');
           setSaveState(change.current === stamp ? 'saved' : 'pending');
         }
@@ -124,11 +128,15 @@ export function useProject(id: string) {
         if (ignore) return;
         server.current = result.project;
         baseBoard.current = result.project.board;
+        baseBrief.current = result.project.brief;
+        baseTitle.current = result.project.title;
         let local: LocalDraft = {
           revision: result.project.revision,
           title: result.project.title,
           brief: result.project.brief,
-          board: result.project.board,
+          baseBrief: result.project.brief,
+          baseTitle: result.project.title,
+          board: { ...result.project.board, nodes: orderedNodes(result.project.board.nodes) },
         };
         try {
           const stored = localStorage.getItem(key);
@@ -140,8 +148,19 @@ export function useProject(id: string) {
               parsed.brief &&
               typeof parsed.title === 'string'
             ) {
-              local = parsed;
+              local = {
+                ...parsed,
+                board: { ...parsed.board, nodes: orderedNodes(parsed.board.nodes) },
+              };
               baseBoard.current = parsed.baseBoard || parsed.board;
+              baseBrief.current =
+                parsed.baseBrief ??
+                (parsed.revision === result.project.revision ? result.project.brief : undefined);
+              baseTitle.current =
+                parsed.baseTitle ??
+                (parsed.revision === result.project.revision ? result.project.title : undefined);
+              local.baseBrief = baseBrief.current;
+              local.baseTitle = baseTitle.current;
               change.current++;
               if (parsed.revision !== result.project.revision) {
                 conflict.current = true;
@@ -232,11 +251,15 @@ export function useProject(id: string) {
     if (change.current === saved.current) {
       server.current = result.project;
       baseBoard.current = result.project.board;
+      baseBrief.current = result.project.brief;
+      baseTitle.current = result.project.title;
       current.current = {
         revision: result.project.revision,
         title: result.project.title,
         brief: result.project.brief,
-        board: result.project.board,
+        baseBrief: result.project.brief,
+        baseTitle: result.project.title,
+        board: { ...result.project.board, nodes: orderedNodes(result.project.board.nodes) },
       };
       setDraft(current.current);
     }
@@ -245,25 +268,25 @@ export function useProject(id: string) {
     const result = await api<ProjectDetail>(`/projects/${id}`);
     const local = current.current;
     if (!local) return;
-    const baseNodes = new Set(baseBoard.current?.nodes.map((n) => n.id));
-    const baseEdges = new Set(baseBoard.current?.edges.map((e) => e.id));
-    const ids = new Set(local.board.nodes.map((n) => n.id));
-    const edgeIds = new Set(local.board.edges.map((e) => e.id));
-    const nodes = [
-      ...local.board.nodes,
-      ...result.project.board.nodes.filter((n) => !ids.has(n.id) && !baseNodes.has(n.id)),
-    ];
-    const nodeIds = new Set(nodes.map((n) => n.id));
-    const edges = [
-      ...local.board.edges,
-      ...result.project.board.edges.filter((e) => !edgeIds.has(e.id) && !baseEdges.has(e.id)),
-    ].filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+    const board = mergeBoards(local.board, result.project.board, baseBoard.current);
+    const fields = mergeProjectFields(local, result.project, {
+      brief: baseBrief.current,
+      title: baseTitle.current,
+    });
     server.current = result.project;
     baseBoard.current = result.project.board;
+    baseBrief.current = result.project.brief;
+    baseTitle.current = result.project.title;
     conflict.current = false;
     setDetail(result);
     setSaveError('');
-    update({ revision: result.project.revision, board: { ...local.board, nodes, edges } });
+    update({
+      revision: result.project.revision,
+      board,
+      ...fields,
+      baseBrief: result.project.brief,
+      baseTitle: result.project.title,
+    });
     return flush();
   }, [id, update, flush]);
   const reload = useCallback(async () => {
@@ -272,11 +295,15 @@ export function useProject(id: string) {
     saved.current = change.current;
     server.current = result.project;
     baseBoard.current = result.project.board;
+    baseBrief.current = result.project.brief;
+    baseTitle.current = result.project.title;
     current.current = {
       revision: result.project.revision,
       title: result.project.title,
       brief: result.project.brief,
-      board: result.project.board,
+      baseBrief: result.project.brief,
+      baseTitle: result.project.title,
+      board: { ...result.project.board, nodes: orderedNodes(result.project.board.nodes) },
     };
     setDetail(result);
     setDraft(current.current);
@@ -309,5 +336,6 @@ export function useProject(id: string) {
     undo,
     redo,
     historyCount,
+    savedRevision: () => server.current?.revision,
   };
 }

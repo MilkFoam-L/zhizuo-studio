@@ -23,6 +23,7 @@ export interface Provider extends Omit<ProviderInput, 'apiKey'> {
   hasKey: boolean;
   createdAt: string;
 }
+export type BrandFont = 'sans' | 'serif';
 export interface Brief {
   productName: string;
   sellingPoints: string;
@@ -33,16 +34,43 @@ export interface Brief {
   tone: string;
   platform: 'xiaohongshu' | 'commerce' | 'douyin';
   confirmed: boolean;
+  brandKitId?: string;
+  brandKitRevision?: number;
+  logoAssetId?: string;
+  fontFamily?: BrandFont;
+  bannedTerms?: string[];
 }
 export interface BoardNode {
   id: string;
   type: 'content';
+  parentId?: string;
+  width?: number;
+  height?: number;
   position: { x: number; y: number };
   data: {
-    kind: 'brief' | 'asset' | 'copy' | 'poster' | 'image';
+    kind:
+      | 'brief'
+      | 'asset'
+      | 'copy'
+      | 'poster'
+      | 'image'
+      | 'prompt'
+      | 'generation'
+      | 'annotation'
+      | 'group';
     label: string;
     assetId?: string;
     versionId?: string;
+    taskId?: string;
+    taskSnapshot?: {
+      kind: 'copy' | 'image';
+      status: TaskStatus;
+      createdAt: string;
+      resultVersionId?: string;
+    };
+    text?: string;
+    color?: string;
+    reviewStatus?: 'open' | 'resolved';
   };
 }
 export interface BoardEdge {
@@ -50,6 +78,7 @@ export interface BoardEdge {
   source: string;
   target: string;
   label?: string;
+  kind?: 'uses' | 'derived_from' | 'variant_of' | 'reviewed_by';
 }
 export interface Board {
   schemaVersion: 1;
@@ -98,6 +127,9 @@ export interface PosterText {
   align: 'left' | 'center' | 'right';
 }
 export interface Poster {
+  fontFamily?: BrandFont;
+  logoAssetId?: string;
+  logoBox?: { x: number; y: number; width: number; height: number };
   width: number;
   height: number;
   background: string;
@@ -213,9 +245,12 @@ export function makePoster(templateId: string, brief: Brief, assetId?: string): 
   return {
     width: t.width,
     height: t.height,
+    fontFamily: brief.fontFamily ?? 'sans',
+    ...(brief.logoAssetId ? { logoAssetId: brief.logoAssetId } : {}),
+    ...(brief.logoAssetId ? { logoBox: { x: t.width - 170, y: 65, width: 80, height: 80 } } : {}),
     background: t.color,
     accent: brief.brandColor,
-    assetId,
+    ...(assetId ? { assetId } : {}),
     templateId: t.id,
     imageBox: { x: 90, y: 440, width: 900, height: t.height - 660 },
     texts: [
@@ -265,4 +300,44 @@ export function makePoster(templateId: string, brief: Brief, assetId?: string): 
       },
     ],
   };
+}
+
+export interface BrandInput {
+  name: string;
+  primaryColor: string;
+  secondaryColor: string;
+  tone: string;
+  bannedTerms: string[];
+  fontFamily: BrandFont;
+}
+export interface BrandKit extends BrandInput {
+  id: string;
+  workspaceId: string;
+  revision: number;
+  logoAssetId?: string;
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface ShareLink {
+  id: string;
+  title: string;
+  versionIds: string[];
+  expiresAt: string;
+  revokedAt?: string;
+  createdAt: string;
+  urlPath: string;
+}
+export interface SharedContent {
+  title: string;
+  expiresAt: string;
+  versions: Array<{
+    id: string;
+    kind: 'copy' | 'poster' | 'image';
+    label: string;
+    createdAt: string;
+    copy?: Omit<CopyDraft, 'warnings'>;
+    width?: number;
+    height?: number;
+  }>;
 }

@@ -26,7 +26,9 @@ export function versionAssetIds(
     typeof snapshot.referenceAssetId === 'string'
       ? snapshot.referenceAssetId
       : undefined;
-  return [version.assetId, version.poster?.assetId, reference].filter((id): id is string => !!id);
+  return [version.assetId, version.poster?.assetId, version.poster?.logoAssetId, reference].filter(
+    (id): id is string => !!id,
+  );
 }
 export class Repository {
   constructor(readonly db: Database) {}
@@ -74,11 +76,10 @@ export class Repository {
     patch: Partial<Pick<Project, 'title' | 'brief' | 'board'>>,
   ) {
     return this.db.transaction(async () => {
-      if (patch.board)
-        await this.lockAssets(
-          id,
-          patch.board.nodes.map((node) => node.data.assetId),
-        );
+      await this.lockAssets(id, [
+        ...(patch.board?.nodes.map((node) => node.data.assetId) ?? []),
+        patch.brief?.logoAssetId,
+      ]);
       const project = await this.project(id);
       const next = { ...project, ...patch, revision: revision + 1, updatedAt: now() };
       const rows = await this.db.query<{ body: Project }>(
@@ -99,7 +100,10 @@ export class Repository {
       };
       const nodes = [...p.board.nodes, node];
       const edges = p.board.nodes.some((n) => n.id === source)
-        ? [...p.board.edges, { id: `${source}-${node.id}`, source, target: node.id }]
+        ? [
+            ...p.board.edges,
+            { id: `${source}-${node.id}`, source, target: node.id, kind: 'derived_from' as const },
+          ]
         : p.board.edges;
       try {
         await this.update(id, p.revision, { board: { ...p.board, nodes, edges } });
@@ -123,7 +127,7 @@ export class Repository {
           position: { x: 0, y: 0 },
           data: { kind: v.kind, label: v.label, versionId: version.id, assetId: v.assetId },
         },
-        v.parentVersionId ?? 'brief',
+        v.taskId ? `task-${v.taskId}` : (v.parentVersionId ?? 'brief'),
       );
       return version;
     });

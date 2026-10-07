@@ -7,7 +7,10 @@ import type { Database } from './db';
 import { LocalStorage, type BlobStorage } from './storage';
 import { versionAssetIds } from './repository';
 
-const fontFile = path.resolve('apps/server/fonts/NotoSansSC.ttf');
+const fontFiles = {
+  sans: path.resolve('apps/server/fonts/NotoSansSC.ttf'),
+  serif: path.resolve('apps/server/fonts/NotoSerifSC.ttf'),
+};
 process.env.FONTCONFIG_FILE ??= path.resolve('apps/server/fonts/fonts.conf');
 const escape = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -347,7 +350,14 @@ export class Media {
       const project = await this.db.get<Project>('projects', projectId);
       if (
         versions.some((version) => versionAssetIds(version).includes(id)) ||
-        project?.board.nodes.some((node) => node.data.assetId === id)
+        project?.board.nodes.some((node) => node.data.assetId === id) ||
+        project?.brief.logoAssetId === id ||
+        (
+          await this.db.query(
+            "SELECT id FROM documents WHERE scope='brand_kits' AND body->>'logoAssetId'=$1 LIMIT 1",
+            [id],
+          )
+        ).length > 0
       )
         return false;
       // Remove visibility and persist cleanup intent atomically before remote I/O.
@@ -385,14 +395,28 @@ export class Media {
         .toBuffer();
       overlays.push({ input: picture, left: Math.floor(imageBox.x), top: Math.floor(imageBox.y) });
     }
+    if (poster.logoAssetId) {
+      await this.owned(poster.logoAssetId, projectId);
+      const box = poster.logoBox ?? { x: width - 170, y: 65, width: 80, height: 80 };
+      if (box.x + box.width > width || box.y + box.height > height)
+        throw new Error('Logo超出画布，请调整位置');
+      const logo = await sharp(await this.bytes(poster.logoAssetId))
+        .resize(Math.floor(box.width), Math.floor(box.height), {
+          fit: 'contain',
+          background: '#ffffff00',
+        })
+        .png()
+        .toBuffer();
+      overlays.push({ input: logo, left: Math.floor(box.x), top: Math.floor(box.y) });
+    }
     // Render one CJK-wrapped line at a time with the bundled OFL font; no host font dependency.
     for (const line of layoutPoster(poster).lines) {
       if (!line.text.trim()) continue;
       const input = await sharp({
         text: {
           text: `<span foreground="${escape(line.color)}" weight="${line.fontWeight}">${escape(line.text)}</span>`,
-          font: `Noto Sans SC ${line.fontSize}`,
-          fontfile: fontFile,
+          font: `${poster.fontFamily === 'serif' ? 'Noto Serif SC' : 'Noto Sans SC'} ${line.fontSize}`,
+          fontfile: fontFiles[poster.fontFamily ?? 'sans'],
           rgba: true,
           dpi: 72,
         },

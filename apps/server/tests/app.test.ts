@@ -211,6 +211,37 @@ test('credentials remain encrypted and omitted; tasks are idempotent and snapsho
     r = await s.app.inject({ method: 'GET', url: `/api/projects/${project.id}`, headers });
     assert.ok(!r.body.includes('private-test-key'));
     assert.ok(!r.body.includes('"secret"'));
+    // Task creation appends the generation node in the same transaction as the task.
+    const detail = r.json<ProjectDetail>();
+    const genNode = detail.project.board.nodes.find((n) => n.data.kind === 'generation');
+    assert.equal(genNode?.data.taskId, task.id);
+    assert.ok(detail.project.board.edges.some((e) => e.target === genNode!.id));
+    r = await s.app.inject({
+      method: 'PATCH',
+      url: `/api/projects/${project.id}`,
+      headers,
+      payload: {
+        revision: detail.project.revision,
+        board: {
+          ...detail.project.board,
+          nodes: [
+            ...detail.project.board.nodes,
+            {
+              id: 'foreign-task-node',
+              type: 'content',
+              position: { x: 0, y: 0 },
+              data: {
+                kind: 'generation',
+                label: '外部任务',
+                taskId: '00000000-0000-4000-a000-000000000000',
+              },
+            },
+          ],
+        },
+      },
+    });
+    assert.equal(r.statusCode, 400);
+    assert.match(r.body, /不属于当前项目的生成任务/);
     r = await s.app.inject({ method: 'POST', url: `/api/tasks/${task.id}/cancel`, headers });
     assert.equal(r.json().status, 'cancelled');
     r = await s.app.inject({
@@ -421,6 +452,182 @@ test('daily task cap holds under concurrent requests in the single-instance depl
     assert.equal(result.filter((r) => r.statusCode === 200).length, 1);
     assert.equal(result.filter((r) => r.statusCode === 429).length, 4);
     assert.equal((await s.db.list('tasks')).length, 1);
+  } finally {
+    await s.app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('backup converts tasks to historical snapshots; restore remaps groups, logos and snapshots', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'zhizuo-backup-snap-'));
+  const s = await createApp({ dataDir: dir, worker: false });
+  try {
+    const picture = await sharp({
+      create: { width: 300, height: 220, channels: 3, background: '#8a9a8f' },
+    })
+      .png()
+      .toBuffer();
+    let r = await s.app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers,
+      payload: { title: '备份快照验证', brief },
+    });
+    const project = r.json<ProjectDetail>().project;
+    let detail: ProjectDetail;
+    r = await s.app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/assets`,
+      ...multipart(picture, 'logo.png'),
+    });
+    const asset = r.json();
+    r = await s.app.inject({ method: 'GET', url: `/api/projects/${project.id}`, headers });
+    detail = r.json<ProjectDetail>();
+    r = await s.app.inject({
+      method: 'PATCH',
+      url: `/api/projects/${project.id}`,
+      headers,
+      payload: { revision: detail.project.revision, brief: { ...brief, logoAssetId: asset.id } },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    r = await s.app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/posters`,
+      headers,
+      payload: { templateId: 'xhs-editorial' },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.ok(r.json().poster?.logoAssetId);
+    r = await s.app.inject({
+      method: 'POST',
+      url: '/api/providers',
+      headers,
+      payload: {
+        name: '备份渠道',
+        kind: 'openai',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'backup-secret-key',
+        textModel: 'test-text',
+        imageModel: 'test-image',
+        timeoutSeconds: 30,
+      },
+    });
+    const provider = r.json<Provider>();
+    r = await s.app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/tasks`,
+      headers,
+      payload: {
+        kind: 'copy',
+        providerId: provider.id,
+        prompt: '写三页图文',
+        idempotencyKey: 'backup-snapshot-key',
+      },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    const task = r.json();
+    r = await s.app.inject({ method: 'GET', url: `/api/projects/${project.id}`, headers });
+    detail = r.json<ProjectDetail>();
+    const genNode = detail.project.board.nodes.find((n) => n.data.kind === 'generation');
+    assert.ok(genNode);
+    const groupId = 'backup-group';
+    const noteId = 'backup-note';
+    r = await s.app.inject({
+      method: 'PATCH',
+      url: `/api/projects/${project.id}`,
+      headers,
+      payload: {
+        revision: detail.project.revision,
+        board: {
+          ...detail.project.board,
+          nodes: [
+            ...detail.project.board.nodes,
+            {
+              id: groupId,
+              type: 'content',
+              position: { x: 0, y: 0 },
+              width: 900,
+              height: 600,
+              data: { kind: 'group', label: '备注分组' },
+            },
+            {
+              id: noteId,
+              type: 'content',
+              parentId: groupId,
+              position: { x: 20, y: 20 },
+              data: {
+                kind: 'annotation',
+                label: '备注',
+                text: '发布前核对价格',
+                color: '#b4552d',
+                reviewStatus: 'open',
+              },
+            },
+          ],
+        },
+      },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    r = await s.app.inject({ method: 'GET', url: `/api/projects/${project.id}/backup`, headers });
+    assert.equal(r.statusCode, 200);
+    const backupBytes = r.rawPayload;
+    const manifest = JSON.parse(strFromU8(unzipSync(backupBytes)['project.json']));
+    const exportGen = manifest.project.board.nodes.find(
+      (n: { data: { kind: string } }) => n.data.kind === 'generation',
+    );
+    assert.ok(exportGen.data.taskSnapshot);
+    assert.equal(exportGen.data.taskSnapshot.status, 'queued');
+    assert.equal(exportGen.data.taskId, undefined);
+    assert.ok(!JSON.stringify(manifest).includes('backup-secret-key'));
+    r = await s.app.inject({
+      method: 'POST',
+      url: '/api/import',
+      ...multipart(backupBytes, 'backup.zip', 'application/zip'),
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    const restored = r.json<ProjectDetail>();
+    const restoredGen = restored.project.board.nodes.find((n) => n.data.kind === 'generation');
+    assert.ok(restoredGen?.data.taskSnapshot);
+    assert.equal(restoredGen.data.taskId, undefined);
+    assert.ok(!restored.project.brief.brandKitId);
+    assert.notEqual(restored.project.brief.logoAssetId, asset.id);
+    assert.ok(restored.assets.some((a) => a.id === restored.project.brief.logoAssetId));
+    const restoredPoster = restored.versions.find((v) => v.poster?.logoAssetId);
+    assert.ok(restoredPoster);
+    assert.notEqual(restoredPoster.poster!.logoAssetId, asset.id);
+    const restoredGroup = restored.project.board.nodes.find((n) => n.data.kind === 'group');
+    const restoredNote = restored.project.board.nodes.find((n) => n.data.kind === 'annotation');
+    assert.ok(restoredGroup && restoredNote);
+    assert.equal(restoredNote.parentId, restoredGroup.id);
+    assert.equal(restoredNote.data.text, '发布前核对价格');
+    // A backup carrying a runnable task node without a snapshot must be rejected.
+    const raw = JSON.parse(strFromU8(unzipSync(backupBytes)['project.json']));
+    raw.project.board.nodes.push({
+      id: 'runnable-task-node',
+      type: 'content',
+      position: { x: 0, y: 0 },
+      data: {
+        kind: 'generation',
+        label: '外部任务',
+        taskId: '00000000-0000-4000-a000-000000000000',
+      },
+    });
+    const tampered = zipSync({
+      'project.json': strToU8(JSON.stringify(raw)),
+      ...Object.fromEntries(
+        manifest.assets.map((a: { id: string }) => [
+          `assets/${a.id}.png`,
+          unzipSync(backupBytes)[`assets/${a.id}.png`],
+        ]),
+      ),
+    });
+    r = await s.app.inject({
+      method: 'POST',
+      url: '/api/import',
+      ...multipart(Buffer.from(tampered), 'tampered.zip', 'application/zip'),
+    });
+    assert.equal(r.statusCode, 400);
+    assert.match(r.body, /无法恢复为历史记录/);
   } finally {
     await s.app.close();
     await rm(dir, { recursive: true, force: true });

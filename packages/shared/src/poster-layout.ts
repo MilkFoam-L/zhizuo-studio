@@ -47,7 +47,9 @@ export function layoutPoster(poster: Poster): { lines: TextLine[]; warnings: str
   }
   return { lines, warnings: [...new Set(warnings)] };
 }
-export function contentWarnings(text: string): string[] {
+export function contentWarnings(text: string, bannedTerms: string[] = []): string[] {
   const words = ['全网最低', '第一', '最好', '顶级', '100%有效', '根治', '治愈', '稳赚', '零风险'];
-  return words.filter((w) => text.includes(w)).map((w) => `请核实“${w}”的事实依据和适用规则`);
+  return [...new Set([...words, ...bannedTerms.filter(Boolean)])]
+    .filter((w) => text.includes(w))
+    .map((w) => `请核实“${w}”的事实依据和适用规则`);
 }

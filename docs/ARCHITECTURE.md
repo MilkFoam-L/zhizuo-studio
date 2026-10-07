@@ -49,7 +49,9 @@ flowchart TB
 | `apps/server/src/providers.ts` | 三种协议、加密凭据、HTTPS / DNS 校验、请求与响应适配 |
 | `apps/server/src/media.ts` | 图片归一化、缩略图、字体渲染、PNG 导出、上传租约与跨进程清理、引用复查独占锁 |
 | `apps/server/src/storage.ts` | 本地磁盘与官方 AWS SDK 的 S3 读 / 写 / 删适配、存储位置标识 |
-| `apps/server/src/backup.ts` | 项目 ZIP 打包、校验、恢复为新项目、引用重映射 |
+| `apps/server/src/backup.ts` | 项目 ZIP 打包、校验、恢复为新项目、引用重映射、任务历史快照 |
+| `apps/server/src/brands.ts` | 品牌资料库：空间隔离、revision、归档、Logo 归一化与独立副本复制 |
+| `apps/server/src/shares.ts` | 只读分享：固定版本快照、凭证加密、有效期与撤销、公开白名单渲染 |
 | `packages/shared/src` | 前后端共享实体、模板与中文换行 / 内容提示规则 |
 | `apps/server/tests` | 服务端与供应商合同测试；通过状态以运行记录为准 |
 
@@ -72,9 +74,9 @@ Dashboard、Providers、ProjectEditor、AccountAdmin、Usage 按页面使用 Rea
 
 `Database.transaction` 通过 AsyncLocalStorage 绑定调用链到同一事务连接，嵌套事务使用 savepoint；事务结束后的遗留调用不能继续借用该上下文。PostgreSQL 初始化使用事务级 advisory lock，避免 API / worker 同时建表。PostgreSQL 的 json / jsonb 参数按与 PGlite 相同的 JSON 文本合同传入，已修复客户端再次编码为 JSON 字符串的问题；真实 PostgreSQL 测试检查对象类型与字符串值往返。网络请求不放进持有行锁的长事务。
 
-scope 包含 projects、assets、versions、tasks、providers、sessions、usage、pending_assets。它们是统一文档表里的分类，不是具有独立外键约束的完整关系模型。`sessions` 仅用于旧共享密码模式，个人账号使用独立的 `auth_sessions`。
+scope 包含 projects、assets、versions、tasks、providers、sessions、usage、pending_assets、brand_kits、shares。它们是统一文档表里的分类，不是具有独立外键约束的完整关系模型。`sessions` 仅用于旧共享密码模式，个人账号使用独立的 `auth_sessions`。`brand_kits` 保存当前空间的品牌资料（独立 revision、归档标记、内部 `brand:<编号>` Logo 命名空间），`shares` 保存只读分享快照（SHA-256 凭证哈希与 AES-GCM 加密凭证，公开访问走 `X-Share-Token` 头）。
 
-项目聚合包含 title、brief、board、revision、workspaceId 和时间。渠道也保存 workspaceId；旧记录缺失该字段时视为 `local`。素材、版本、任务和用量通过 projectId 追溯空间。board 仍使用 `schemaVersion: 1`，包括节点、连线和 viewport；当前节点 kind 是 brief / asset / copy / poster / image，连线为 source / target 和可选 label。原计划的独立 prompt、generation、annotation、group 节点与类型化关系需要后续实现。
+项目聚合包含 title、brief、board、revision、workspaceId 和时间。渠道也保存 workspaceId；旧记录缺失该字段时视为 `local`。素材、版本、任务和用量通过 projectId 追溯空间。board 仍使用 `schemaVersion: 1`，包括节点、连线和 viewport；当前节点 kind 是 brief / asset / copy / poster / image / prompt / generation / annotation / group，连线为 source / target、可选 label 和类型（uses / derived_from / variant_of / reviewed_by）。generation 节点在任务创建的同一事务内追加；备份导出将任务降级为白名单历史快照，恢复时剥离可执行任务 ID 并重映射素材 / 版本 / 父分组引用。品牌资料与只读分享分别见 `BRANDS.md` 与 `SHARING.md`。
 
 编辑端约 800ms 防抖保存；服务端要求客户端提交 revision，以带条件的 UPDATE 防止静默覆盖。冲突时返回 409，浏览器保留未保存草稿，提供合并或重新加载。当前合并以本地已编辑布局为主补入新节点 / 连线，不是多用户文本合并或 CRDT。
 

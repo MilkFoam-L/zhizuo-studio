@@ -7,8 +7,42 @@ import { Repository } from './repository';
 import { Media } from './media';
 
 export async function backup(repo: Repository, media: Media, id: string) {
-  const { project, assets, versions } = await repo.detail(id);
-  const manifest = { format: 'zhizuo', schemaVersion: 1, project, assets, versions };
+  const { project, assets, versions, tasks } = await repo.detail(id);
+  // Generation nodes become historical snapshots: no runnable taskId, no provider
+  // configuration, only the whitelist fields a restored project can display.
+  const board = {
+    ...project.board,
+    nodes: project.board.nodes.map((n) => {
+      if (n.data.kind !== 'generation') return n;
+      const task = n.data.taskId ? tasks.find((t) => t.id === n.data.taskId) : undefined;
+      const snapshot = n.data.taskSnapshot;
+      const kind = task?.kind ?? snapshot?.kind;
+      const status = task?.status ?? snapshot?.status;
+      const createdAt = task?.createdAt ?? snapshot?.createdAt;
+      const resultVersionId = task?.resultVersionId ?? snapshot?.resultVersionId;
+      if (!kind || !status || !createdAt) return n;
+      const { taskId: _runnable, ...rest } = n.data;
+      return {
+        ...n,
+        data: {
+          ...rest,
+          taskSnapshot: {
+            kind,
+            status,
+            createdAt,
+            ...(resultVersionId ? { resultVersionId } : {}),
+          },
+        },
+      };
+    }),
+  };
+  const manifest = {
+    format: 'zhizuo',
+    schemaVersion: 1,
+    project: { ...project, board },
+    assets,
+    versions,
+  };
   importSchema.parse(manifest);
   const json = strToU8(JSON.stringify(manifest, null, 2));
   if (json.length > 5 * 1024 * 1024) throw new Error('项目元数据超过当前5 MB备份限制，请拆分项目');
@@ -70,6 +104,19 @@ export async function restore(repo: Repository, media: Media, zip: Buffer, works
       (n.data.versionId && !versionIds.has(n.data.versionId))
     )
       throw new Error('画布节点引用不存在的内容');
+  for (const n of input.project.board.nodes) {
+    if (n.data.kind !== 'generation') continue;
+    // Runnable task IDs cannot be restored; only whitelisted historical snapshots travel.
+    if (n.data.taskId && !n.data.taskSnapshot)
+      throw new Error('备份包含无法恢复为历史记录的生成任务节点');
+    if (
+      n.data.taskSnapshot?.resultVersionId &&
+      !versionIds.has(n.data.taskSnapshot.resultVersionId)
+    )
+      throw new Error('任务快照引用不存在的版本');
+  }
+  if (input.project.brief.logoAssetId && !assetIds.has(input.project.brief.logoAssetId))
+    throw new Error('简报引用不存在的素材');
   for (const e of input.project.board.edges)
     if (!nodeIds.has(e.source) || !nodeIds.has(e.target))
       throw new Error('画布连接引用不存在的节点');
@@ -82,7 +129,8 @@ export async function restore(repo: Repository, media: Media, zip: Buffer, works
       throw new Error('备份中的版本缺少内容');
     if (
       (v.assetId && !assetIds.has(v.assetId)) ||
-      (v.poster?.assetId && !assetIds.has(v.poster.assetId))
+      (v.poster?.assetId && !assetIds.has(v.poster.assetId)) ||
+      (v.poster?.logoAssetId && !assetIds.has(v.poster.logoAssetId))
     )
       throw new Error('版本引用不存在的素材');
     if (v.parentVersionId && !versionIds.has(v.parentVersionId)) throw new Error('来源版本不存在');
@@ -94,7 +142,17 @@ export async function restore(repo: Repository, media: Media, zip: Buffer, works
       parent = input.versions.find((x) => x.id === parent)?.parentVersionId;
     }
   }
-  const p = await repo.create(`${input.project.title}（恢复）`, input.project.brief, workspaceId);
+  const p = await repo.create(
+    `${input.project.title}（恢复）`,
+    // Brand-library identity stays in the source workspace; style fields travel in the brief.
+    {
+      ...input.project.brief,
+      logoAssetId: undefined,
+      brandKitId: undefined,
+      brandKitRevision: undefined,
+    },
+    workspaceId,
+  );
   const assetMap = new Map<string, string>();
   const versionMap = new Map(input.versions.map((v) => [v.id, randomUUID()]));
   try {
@@ -130,7 +188,11 @@ export async function restore(repo: Repository, media: Media, zip: Buffer, works
         createdAt: v.createdAt ?? new Date().toISOString(),
         assetId: v.assetId ? assetMap.get(v.assetId) : undefined,
         poster: v.poster
-          ? { ...v.poster, assetId: v.poster.assetId ? assetMap.get(v.poster.assetId) : undefined }
+          ? {
+              ...v.poster,
+              ...(v.poster.assetId ? { assetId: assetMap.get(v.poster.assetId) } : {}),
+              ...(v.poster.logoAssetId ? { logoAssetId: assetMap.get(v.poster.logoAssetId) } : {}),
+            }
           : undefined,
       };
       restored.inputSnapshot = remapSnapshot(v.inputSnapshot);
@@ -144,15 +206,33 @@ export async function restore(repo: Repository, media: Media, zip: Buffer, works
     );
     const board = {
       ...input.project.board,
-      nodes: input.project.board.nodes.map((n) => ({
-        ...n,
-        id: nodeMap.get(n.id)!,
-        data: {
-          ...n.data,
-          assetId: n.data.assetId ? assetMap.get(n.data.assetId) : undefined,
-          versionId: n.data.versionId ? versionMap.get(n.data.versionId) : undefined,
-        },
-      })),
+      nodes: input.project.board.nodes.map((n) => {
+        const { taskId: _unrunnable, ...nodeData } = n.data;
+        return {
+          ...n,
+          id: nodeMap.get(n.id)!,
+          ...(n.parentId ? { parentId: nodeMap.get(n.parentId) } : {}),
+          data: {
+            ...nodeData,
+            assetId: n.data.assetId ? assetMap.get(n.data.assetId) : undefined,
+            versionId: n.data.versionId ? versionMap.get(n.data.versionId) : undefined,
+            ...(n.data.taskSnapshot
+              ? {
+                  taskSnapshot: {
+                    ...n.data.taskSnapshot,
+                    ...(n.data.taskSnapshot.resultVersionId
+                      ? {
+                          resultVersionId:
+                            versionMap.get(n.data.taskSnapshot.resultVersionId) ??
+                            n.data.taskSnapshot.resultVersionId,
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
+        };
+      }),
       edges: input.project.board.edges
         .filter((e) => nodeMap.has(e.source) && nodeMap.has(e.target))
         .map((e) => ({
@@ -162,7 +242,13 @@ export async function restore(repo: Repository, media: Media, zip: Buffer, works
           target: nodeMap.get(e.target)!,
         })),
     };
-    await repo.update(p.id, p.revision, { board });
+    const brief = {
+      ...input.project.brief,
+      ...(input.project.brief.logoAssetId
+        ? { logoAssetId: assetMap.get(input.project.brief.logoAssetId) }
+        : {}),
+    };
+    await repo.update(p.id, p.revision, { board, brief });
     return repo.detail(p.id);
   } catch (e) {
     for (const a of await repo.db.list<Asset>('assets', p.id)) await media.remove(a.id);

@@ -13,6 +13,7 @@ import {
   Settings2,
   Sparkles,
   Sprout,
+  SwatchBook,
   UsersRound,
 } from 'lucide-react';
 import { api, json, message, SESSION_EXPIRED_EVENT, type SessionInfo } from './api';
@@ -31,6 +32,10 @@ const AccountAdmin = lazy(() =>
   import('./AccountAdmin').then((module) => ({ default: module.AccountAdmin })),
 );
 const Usage = lazy(() => import('./Usage').then((module) => ({ default: module.Usage })));
+const Brands = lazy(() => import('./Brands').then((module) => ({ default: module.Brands })));
+const PublicShare = lazy(() =>
+  import('./PublicShare').then((module) => ({ default: module.PublicShare })),
+);
 import { ErrorBox, Modal, Spinner, Toast } from './ui';
 const currentRoute = () => window.location.hash.slice(1) || '/';
 export function App() {
@@ -157,6 +162,19 @@ export function App() {
         )}
       </div>
     );
+  // 公开分享页在登录流程之前渲染：持链接访问者无需进入工作台。
+  if (route.startsWith('/share/'))
+    return (
+      <Suspense
+        fallback={
+          <div className="screen-center">
+            <Spinner label="正在打开分享" />
+          </div>
+        }
+      >
+        <PublicShare token={route.slice('/share/'.length)} />
+      </Suspense>
+    );
   if (!session.authenticated)
     return (
       <div className="login-page">
@@ -244,7 +262,9 @@ export function App() {
           ? 'settings'
           : route === '/templates'
             ? 'templates'
-            : 'projects';
+            : route === '/brands'
+              ? 'brands'
+              : 'projects';
   return (
     <div className={`app-shell ${projectId ? 'in-editor' : ''}`}>
       <a
@@ -292,6 +312,16 @@ export function App() {
           >
             <Settings2 size={19} />
             模型接入
+          </a>
+          <a
+            className={page === 'brands' ? 'active' : ''}
+            href="#/brands"
+            aria-current={page === 'brands' ? 'page' : undefined}
+            aria-label="品牌资料库"
+            title="品牌资料库"
+          >
+            <SwatchBook size={19} />
+            品牌资料库
           </a>
           <a
             className={page === 'usage' ? 'active' : ''}
@@ -384,6 +414,8 @@ export function App() {
             <Providers notify={notify} />
           ) : page === 'usage' ? (
             <Usage session={session} notify={notify} />
+          ) : page === 'brands' ? (
+            <Brands notify={notify} />
           ) : page === 'accounts' ? (
             canManageAccounts && session.user ? (
               <AccountAdmin currentUser={session.user} notify={notify} />

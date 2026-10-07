@@ -26,6 +26,10 @@ import {
   Edit3,
   FileText,
   GitBranch,
+  Group,
+  MessageSquare,
+  StickyNote,
+  Share2,
   Image,
   Layers3,
   Maximize,
@@ -53,7 +57,10 @@ import {
 } from '../../../packages/shared/src/index';
 import { contentWarnings, layoutPoster } from '../../../packages/shared/src/poster-layout';
 import { api, download, json, message } from './api';
-import { Canvas } from './Canvas';
+import { Canvas, CanvasNodeEditor } from './Canvas';
+import { createGroup, generationNodeState, removeNodes, withTaskNodes } from './canvas-helpers';
+import { BrandPicker } from './BrandPicker';
+import { ShareDialog } from './ShareDialog';
 import { CopyEditor, PosterEditor, VersionCompare } from './Editors';
 import {
   ErrorBox,
@@ -81,6 +88,7 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [providerError, setProviderError] = useState('');
   const [selected, setSelected] = useState<BoardNode['data'] | null>(null);
+  const [selectedId, setSelectedId] = useState<string>();
   const [panel, setPanel] = useState(() => window.matchMedia('(min-width: 1101px)').matches);
   const [fitSignal, setFitSignal] = useState(0);
   const [modal, setModal] = useState<
@@ -93,6 +101,7 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
     | 'rename'
     | 'reload'
     | 'storyboard'
+    | 'share'
     | null
   >(null);
   const [editingVersion, setEditingVersion] = useState<ContentVersion>();
@@ -114,8 +123,9 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
   const [newTitle, setNewTitle] = useState('');
   const file = useRef<HTMLInputElement>(null);
   const tasksRef = useRef<GenerationTask[] | null>(null);
-  function selectContent(data: BoardNode['data'] | null) {
+  function selectContent(data: BoardNode['data'] | null, nodeId?: string) {
     setSelected(data);
+    setSelectedId(nodeId);
     if (data && data.kind !== 'brief' && window.matchMedia('(max-width: 1100px)').matches)
       setPanel(false);
   }
@@ -130,11 +140,22 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
   }, []);
   useEffect(loadProviders, [loadProviders]);
   useEffect(() => {
+    if (!draft || !tasks.length) return;
+    const board = withTaskNodes(draft.board, tasks, detail?.versions || []);
+    if (board !== draft.board) model.update({ board });
+  }, [draft?.board, tasks, detail?.versions, model.update]);
+  useEffect(() => {
+    if (!selectedId || !draft) return;
+    const node = draft.board.nodes.find((n) => n.id === selectedId);
+    setSelected(node?.data || null);
+    if (!node) setSelectedId(undefined);
+  }, [selectedId, draft?.board]);
+  useEffect(() => {
     if (detail) {
       setTasks(detail.tasks);
       tasksRef.current = detail.tasks;
     }
-  }, [detail]);
+  }, [detail?.tasks]);
   useEffect(() => {
     let stopped = false;
     let controller: AbortController | undefined;
@@ -311,6 +332,7 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
           idempotencyKey: requestKey.current,
         }),
       );
+      await model.refresh();
       setTasks((prev) => [task, ...prev.filter((t) => t.id !== task.id)]);
       setShowTasks(true);
       setModal(null);
@@ -384,6 +406,74 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
       notify('浏览器不允许复制，请打开编辑器手动选择文本。', 'error');
     }
   }
+  function usePrompt(text: string) {
+    openGenerate('copy');
+    setGenPrompt(text);
+  }
+  function viewResultVersion(versionId: string) {
+    const version = detail?.versions.find((v) => v.id === versionId);
+    if (version)
+      selectContent({
+        kind: version.kind,
+        label: version.label,
+        versionId: version.id,
+        assetId: version.assetId,
+      });
+    else void model.refresh().catch((e) => notify(message(e), 'error'));
+  }
+  function viewTaskResult(task: GenerationTask) {
+    if (task.resultVersionId) viewResultVersion(task.resultVersionId);
+  }
+  function addNote(kind: 'prompt' | 'annotation') {
+    if (!draft) return;
+    const node: BoardNode = {
+      id: `${kind}-${crypto.randomUUID()}`,
+      type: 'content',
+      position: {
+        x: (100 - draft.board.viewport.x) / draft.board.viewport.zoom,
+        y: (100 - draft.board.viewport.y) / draft.board.viewport.zoom,
+      },
+      data: {
+        kind,
+        label: kind === 'prompt' ? '创作提示词' : '审阅备注',
+        text: '',
+        color: kind === 'prompt' ? '#cbd9c5' : '#e4c985',
+        ...(kind === 'annotation' ? { reviewStatus: 'open' } : {}),
+      },
+    };
+    model.pushHistory();
+    model.update({
+      board: {
+        ...draft.board,
+        nodes: [
+          ...draft.board.nodes.map((item) => ({ ...item, selected: false })),
+          { ...node, selected: true },
+        ],
+      },
+    });
+    selectContent(node.data, node.id);
+  }
+  const selectedNode = draft?.board.nodes.find((node) =>
+    selectedId
+      ? node.id === selectedId
+      : selected?.versionId
+        ? node.data.versionId === selected.versionId
+        : selected?.assetId
+          ? node.data.assetId === selected.assetId
+          : false,
+  );
+  const selectedTaskState = selected ? generationNodeState(selected, tasks) : undefined;
+  const selectedTask = selectedTaskState?.task;
+  const selectedSnapshot = selectedTaskState?.snapshot;
+  const groupableIds =
+    draft?.board.nodes
+      .filter(
+        (node) =>
+          (node as BoardNode & { selected?: boolean }).selected &&
+          !node.parentId &&
+          node.data.kind !== 'group',
+      )
+      .map((node) => node.id) || [];
   const selectedVersion = detail?.versions.find((v) => v.id === selected?.versionId);
   const selectedAsset = detail?.assets.find(
     (a) => a.id === (selected?.assetId || selectedVersion?.assetId),
@@ -393,7 +483,9 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
     detail?.versions
       .filter((v) => exportIds.includes(v.id))
       .flatMap((v) => [
-        ...(v.copy ? contentWarnings(`${v.copy.titles.join(' ')} ${v.copy.body}`) : []),
+        ...(v.copy
+          ? contentWarnings(`${v.copy.titles.join(' ')} ${v.copy.body}`, draft?.brief.bannedTerms)
+          : []),
         ...(v.poster ? layoutPoster(v.poster).warnings : []),
       ]) || [];
   if (model.loading)
@@ -452,6 +544,21 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
           </div>
         </div>
         <div className="editor-header-actions">
+          <Button
+            className="button secondary small"
+            disabled={busy || !detail.versions.length}
+            onClick={async () => {
+              try {
+                await ensureSaved();
+                setModal('share');
+              } catch (e) {
+                notify(message(e), 'error');
+              }
+            }}
+          >
+            <Share2 size={15} />
+            分享预览
+          </Button>
           <Button className="button secondary small backup-button" onClick={backup} disabled={busy}>
             <ArrowDownToLine size={15} />
             备份项目
@@ -501,6 +608,49 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
             <span>内容简报</span>
           </Button>
           <span className="toolbar-divider" />
+          <Button
+            className="toolbar-button"
+            onClick={() => addNote('prompt')}
+            aria-label="添加提示词"
+            title="添加提示词"
+          >
+            <MessageSquare size={16} />
+            <span>提示词</span>
+          </Button>
+          <Button
+            className="toolbar-button"
+            onClick={() => addNote('annotation')}
+            aria-label="添加备注"
+            title="添加备注"
+          >
+            <StickyNote size={16} />
+            <span>备注</span>
+          </Button>
+          <Button
+            className="toolbar-button"
+            disabled={groupableIds.length < 2}
+            title="Shift 选中至少两个未分组节点"
+            aria-label="创建分组"
+            onClick={() => {
+              const groupId = `group-${crypto.randomUUID()}`;
+              const board = createGroup(draft.board, groupableIds, groupId);
+              if (board === draft.board) {
+                notify('请缩小所选节点范围后分组', 'error');
+                return;
+              }
+              model.pushHistory();
+              model.update({
+                board: {
+                  ...board,
+                  nodes: board.nodes.map((node) => ({ ...node, selected: node.id === groupId })),
+                },
+              });
+              selectContent(board.nodes.find((node) => node.id === groupId)!.data, groupId);
+            }}
+          >
+            <Group size={16} />
+            <span>分组</span>
+          </Button>
           <Button
             className="toolbar-button"
             aria-label="上传素材"
@@ -639,6 +789,27 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
               />
             </Label>
             <div className="brief-section-title">品牌与表达</div>
+            <BrandPicker
+              projectId={id}
+              revision={detail.project.revision}
+              beforeApply={async () => {
+                await ensureSaved();
+                return model.savedRevision()!;
+              }}
+              onApplied={() => {
+                void model.refresh().catch((e) => notify(message(e), 'error'));
+              }}
+              notify={notify}
+            />
+            {draft.brief.brandKitId && (
+              <p className="hint">
+                已应用品牌规范 · {draft.brief.fontFamily === 'serif' ? '衬线字体' : '无衬线字体'}
+                {draft.brief.logoAssetId ? ' · 含品牌 Logo' : ''}
+              </p>
+            )}
+            {!!draft.brief.bannedTerms?.length && (
+              <p className="brand-terms-hint">品牌禁用词：{draft.brief.bannedTerms.join('、')}</p>
+            )}
             <Label>
               品牌名称
               <Input
@@ -710,10 +881,14 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
             brief={draft.brief}
             assets={detail.assets}
             versions={detail.versions}
+            tasks={tasks}
+            onCancelTask={cancelTask}
+            onViewResult={viewResultVersion}
+            onUsePrompt={usePrompt}
             onChange={(board, persist) => model.update({ board }, persist)}
             onHistory={model.pushHistory}
-            onSelect={(data) => {
-              selectContent(data);
+            onSelect={(data, nodeId) => {
+              selectContent(data, nodeId);
               if (data?.kind === 'brief') setPanel(true);
             }}
             fitSignal={fitSignal}
@@ -832,22 +1007,7 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
                             </Button>
                           )}
                           {t.resultVersionId ? (
-                            <Button
-                              className="text-button"
-                              onClick={() => {
-                                const version = detail.versions.find(
-                                  (v) => v.id === t.resultVersionId,
-                                );
-                                if (version)
-                                  selectContent({
-                                    kind: version.kind,
-                                    label: version.label,
-                                    versionId: version.id,
-                                    assetId: version.assetId,
-                                  });
-                                else model.refresh();
-                              }}
-                            >
+                            <Button className="text-button" onClick={() => viewTaskResult(t)}>
                               查看结果
                               <ArrowRight size={12} />
                             </Button>
@@ -888,6 +1048,63 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
               </Button>
             </div>
             <h3 className="inspector-label">{selected.label}</h3>
+            {selectedNode && (
+              <CanvasNodeEditor
+                node={selectedNode}
+                onUsePrompt={usePrompt}
+                onSave={(data, size) => {
+                  model.pushHistory();
+                  model.update({
+                    board: {
+                      ...draft.board,
+                      nodes: draft.board.nodes.map((node) =>
+                        node.id === selectedNode.id ? { ...node, data, ...size } : node,
+                      ),
+                    },
+                  });
+                  setSelected(data);
+                  notify('节点已更新');
+                }}
+                onUngroup={() => {
+                  model.pushHistory();
+                  model.update({ board: removeNodes(draft.board, [selectedNode.id]) });
+                  selectContent(null);
+                }}
+              />
+            )}
+            {selected.kind === 'generation' && (
+              <div className="canvas-task-detail">
+                <Tag>{selectedTaskState?.statusLabel || '任务记录待加载'}</Tag>
+                <p>
+                  {selectedSnapshot
+                    ? '历史记录，不会恢复执行'
+                    : selectedTask?.prompt || '根据已确认的商品简报生成'}
+                </p>
+                {selectedSnapshot && (
+                  <p className="hint">备份任务创建于 {formatTime(selectedSnapshot.createdAt)}</p>
+                )}
+                {selectedTask?.error && <ErrorBox>{selectedTask.error}</ErrorBox>}
+                {selectedTask?.status === 'reconciling' && (
+                  <p className="hint">先核对服务商结果和费用，再决定是否重新创作。</p>
+                )}
+                {selectedTask && selectedTaskState?.canCancel && (
+                  <Button
+                    className="button secondary full"
+                    onClick={() => cancelTask(selectedTask)}
+                  >
+                    {selectedTask.status === 'queued' ? '取消任务' : '停止本地等待'}
+                  </Button>
+                )}
+                {selectedTaskState?.resultVersionId && (
+                  <Button
+                    className="button primary full"
+                    onClick={() => viewResultVersion(selectedTaskState.resultVersionId!)}
+                  >
+                    查看结果
+                  </Button>
+                )}
+              </div>
+            )}
             {selectedVersion?.copy ? (
               <>
                 <div className="copy-preview">
@@ -1018,7 +1235,7 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
                   <ArrowRight size={14} />
                 </a>
               </>
-            ) : (
+            ) : ['prompt', 'annotation', 'group', 'generation'].includes(selected.kind) ? null : (
               <p className="hint">内容加载中，稍后可重新选择节点。</p>
             )}
             {selectedVersion && (
@@ -1055,34 +1272,30 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
                   ))}
               </div>
             )}
-            <div className="inspector-bottom">
-              <Button
-                className="text-button danger-text"
-                onClick={() => {
-                  model.pushHistory();
-                  const node = draft.board.nodes.find((n) =>
-                    selected.versionId
-                      ? n.data.versionId === selected.versionId
-                      : n.data.assetId === selected.assetId,
-                  );
-                  if (node)
-                    model.update({
-                      board: {
-                        ...draft.board,
-                        nodes: draft.board.nodes.filter((n) => n.id !== node.id),
-                        edges: draft.board.edges.filter(
-                          (e) => e.source !== node.id && e.target !== node.id,
-                        ),
-                      },
-                    });
-                  selectContent(null);
-                }}
-              >
-                <Trash2 size={14} />
-                从画布移除节点
-              </Button>
-              <small>素材与版本仍保存在项目中，可通过版本库恢复。</small>
-            </div>
+            {selected.kind !== 'generation' && (
+              <div className="inspector-bottom">
+                <Button
+                  className="text-button danger-text"
+                  disabled={!selectedNode}
+                  onClick={() => {
+                    if (!selectedNode) return;
+                    model.pushHistory();
+                    model.update({ board: removeNodes(draft.board, [selectedNode.id]) });
+                    selectContent(null);
+                  }}
+                >
+                  <Trash2 size={14} />
+                  {selected.kind === 'group' ? '移除分组，保留内容' : '从画布移除节点'}
+                </Button>
+                <small>
+                  {selected.kind === 'group'
+                    ? '内部节点将保留在原位置。'
+                    : selectedVersion || selectedAsset
+                      ? '素材与版本仍保存在项目中，可通过版本库恢复。'
+                      : '可撤销本次画布移除。'}
+                </small>
+              </div>
+            )}
           </aside>
         )}
       </div>
@@ -1097,8 +1310,21 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
         </Button>
         <span>织作 · 每一版灵感都有来处</span>
       </footer>
+      {modal === 'share' && (
+        <ShareDialog
+          projectId={id}
+          versions={detail.versions}
+          onClose={() => setModal(null)}
+          notify={notify}
+        />
+      )}
       {modal === 'copy' && (
-        <CopyEditor version={editingVersion} onClose={() => setModal(null)} onSave={saveCopy} />
+        <CopyEditor
+          version={editingVersion}
+          bannedTerms={draft.brief.bannedTerms}
+          onClose={() => setModal(null)}
+          onSave={saveCopy}
+        />
       )}
       {modal === 'poster' && editingVersion?.poster && (
         <PosterEditor

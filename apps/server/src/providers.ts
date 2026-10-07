@@ -636,7 +636,13 @@ export function createProviderClient(options: ProviderTransportOptions = {}) {
     if (!brief.confirmed) throw new ProviderError('请先确认商品事实再生成内容');
     if (prompt.length > 16000 || JSON.stringify(brief).length > 24000)
       throw new ProviderError('简报或提示内容过长');
-    const content = JSON.stringify({ confirmedProductFacts: brief, instruction: prompt });
+    // Internal identifiers and asset references never leave the workspace.
+    const { brandKitId: _kit, brandKitRevision: _kitRev, logoAssetId: _logo, ...facts } = brief;
+    const banned = (brief.bannedTerms ?? []).filter(Boolean);
+    const instruction = banned.length
+      ? `${prompt}\n\n内容中禁止出现以下词语（也不要用同音或近义写法替代）：${banned.join('、')}`
+      : prompt;
+    const content = JSON.stringify({ confirmedProductFacts: facts, instruction });
     const signal = signalFor(config, externalSignal);
     let text: unknown;
     if (config.kind === 'gemini') {

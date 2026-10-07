@@ -12,7 +12,9 @@ export type Scope =
   | 'providers'
   | 'sessions'
   | 'usage'
-  | 'pending_assets';
+  | 'pending_assets'
+  | 'brand_kits'
+  | 'shares';
 export interface Database {
   query<T>(sql: string, params?: unknown[]): Promise<T[]>;
   transaction<T>(work: () => Promise<T>): Promise<T>;
