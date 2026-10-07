@@ -75,7 +75,10 @@ test('concurrent reservations cannot exceed the persisted workspace limit', asyn
     assert.equal(last.consumed, 0);
     assert.equal(last.available, 0);
     assert.equal(last.records.length, 3);
-    assert.equal(last.events.length, 3);
+    // 3 次 reserve + 一次 100% 用量告警（80% 与 100% 同次越过只记一次）。
+    assert.equal(last.events.length, 4);
+    assert.equal(last.events.filter((e) => e.action === 'reserve').length, 3);
+    assert.equal(last.events.filter((e) => e.action === 'notice').length, 1);
     assert.equal((await f.db.query('SELECT task_id FROM quota_reservations')).length, 3);
   } finally {
     await f.close();
@@ -91,7 +94,9 @@ test('duplicate task reservations are idempotent across instances and cannot cro
     assert.ok(outcomes.every((r) => r.state === 'reserved'));
     let summary = await f.quotas.summary('first-space');
     assert.equal(summary.reserved, 1);
-    assert.equal(summary.events.length, 1);
+    // 1 次 reserve + 一次 100% 用量告警（限额 1 时首次预占即用满）。
+    assert.equal(summary.events.length, 2);
+    assert.equal(summary.events.filter((e) => e.action === 'notice').length, 1);
     await assert.rejects(f.quotas.reserve('one-task', 'second-space'), {
       code: 'QUOTA_CONFLICT',
       statusCode: 409,
@@ -106,7 +111,9 @@ test('duplicate task reservations are idempotent across instances and cannot cro
     summary = await f.quotas.summary('first-space');
     assert.equal(summary.reserved, 0);
     assert.equal(summary.consumed, 1);
-    assert.equal(summary.events.length, 2);
+    // reserve + 100% 告警 + consume。
+    assert.equal(summary.events.length, 3);
+    assert.equal(summary.events.filter((e) => e.action === 'consume').length, 1);
   } finally {
     await f.close();
   }

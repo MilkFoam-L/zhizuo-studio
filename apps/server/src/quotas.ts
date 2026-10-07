@@ -268,8 +268,44 @@ export class QuotaService {
         state: 'reserved',
         reason: '创建任务，预占一次额度',
       });
+      await this.usageNotice(workspaceId, period, taskId, updated[0]);
       return reservation(inserted[0]);
     });
+  }
+
+  /** One-time audit notices when a workspace-day crosses 80% and 100% of quota. */
+  private async usageNotice(
+    workspaceId: string,
+    period: string,
+    taskId: string,
+    window: WindowRow,
+  ) {
+    const used = window.reserved + window.consumed;
+    const ratio = window.limit > 0 ? used / window.limit : 1;
+    const threshold = ratio >= 1 ? '100' : ratio >= 0.8 ? '80' : undefined;
+    if (!threshold) return;
+    const [seen] = await this.db.query<{ id: string }>(
+      `SELECT body->>'id' AS id FROM quota_events WHERE workspace_id=$1 AND body->>'period'=$2
+       AND body->>'action'='notice' AND body->>'threshold'=$3 LIMIT 1`,
+      [workspaceId, period, threshold],
+    );
+    if (seen) return;
+    await this.db.query('INSERT INTO quota_events(workspace_id,body) VALUES($1,$2::jsonb)', [
+      workspaceId,
+      JSON.stringify({
+        id: randomUUID(),
+        createdAt: new Date().toISOString(),
+        workspaceId,
+        period,
+        taskId,
+        action: 'notice',
+        threshold,
+        reason:
+          threshold === '100'
+            ? '今日任务额度已用满，新任务将被拒绝；请核对待确认任务或调整限额'
+            : '今日任务额度已使用 80%，请注意剩余额度',
+      }),
+    ]);
   }
 
   private async transition(

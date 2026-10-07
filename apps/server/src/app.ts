@@ -89,6 +89,22 @@ export async function createApp(options: AppOptions) {
     taskCreationTail = next.catch(() => {});
     return next;
   }
+  // Per-user sliding-window rate limit on task submission (in-process; multi-API
+  // deployments need a shared limiter before relying on this as the only guard).
+  const taskRateLimit = Number(process.env.USER_TASK_RATE_PER_MINUTE || 20);
+  const taskRateWindows = new Map<string, number[]>();
+  const enforceTaskRate = (userId: string) => {
+    if (!Number.isFinite(taskRateLimit) || taskRateLimit <= 0) return;
+    const nowMs = Date.now();
+    const hits = (taskRateWindows.get(userId) ?? []).filter((t) => nowMs - t < 60_000);
+    if (hits.length >= taskRateLimit) {
+      const error = new Error('任务提交过于频繁，请稍后再试') as Error & { statusCode: number };
+      error.statusCode = 429;
+      throw error;
+    }
+    hits.push(nowMs);
+    taskRateWindows.set(userId, hits);
+  };
   const getId = (req: { params: unknown }, name = 'id') =>
     idSchema.parse((req.params as Record<string, unknown>)[name]);
   const isAuthenticated = async (token?: string) => {
@@ -671,6 +687,7 @@ export async function createApp(options: AppOptions) {
     serializeTaskCreation(() =>
       db.transaction(async () => {
         await revalidateActor(req);
+        enforceTaskRate(identities.get(req)?.id ?? 'local-operator');
         const id = getId(req);
         const project = await repo.project(id);
         const b = z
