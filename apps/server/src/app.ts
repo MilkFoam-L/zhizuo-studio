@@ -13,7 +13,14 @@ import type { Asset, ContentVersion, Project } from '../../../packages/shared/sr
 import { EMPTY_BRIEF, makePoster, TEMPLATES } from '../../../packages/shared/src/index';
 import { contentWarnings, layoutPoster } from '../../../packages/shared/src/poster-layout';
 import { NotFound, now } from './repository';
-import { publicTask, publicProvider, type StoredProvider, type StoredTask } from './jobs';
+import {
+  listTaskEvents,
+  publicTask,
+  publicProvider,
+  recordTaskEvent,
+  type StoredProvider,
+  type StoredTask,
+} from './jobs';
 import { validateProviderInput, encryptSecret, decryptSecret, testConnection } from './providers';
 import { boardSchema, briefSchema, copySchema, posterSchema } from './validation';
 import { backup, restore } from './backup';
@@ -632,7 +639,7 @@ export async function createApp(options: AppOptions) {
           `INSERT INTO documents(scope,id,body) VALUES('tasks',$1,$2::jsonb) ON CONFLICT DO NOTHING RETURNING id`,
           [t.id, JSON.stringify(t)],
         );
-        if (inserted.length)
+        if (inserted.length) {
           // Generation node is created in the same transaction as the task and its quota
           // reservation, so the board never references a task that failed to enqueue.
           await repo.append(
@@ -649,6 +656,12 @@ export async function createApp(options: AppOptions) {
             },
             'brief',
           );
+          await recordTaskEvent(db, {
+            taskId: t.id,
+            projectId: id,
+            kind: 'queued',
+          });
+        }
         return publicTask(inserted.length ? t : (await db.get<StoredTask>('tasks', t.id))!);
       }),
     ),
@@ -656,6 +669,13 @@ export async function createApp(options: AppOptions) {
   app.get('/api/projects/:id/tasks', async (req) => {
     await repo.project(getId(req));
     return (await db.list<StoredTask>('tasks', getId(req))).map(publicTask);
+  });
+  app.get('/api/projects/:id/tasks/:taskId/events', async (req) => {
+    const id = getId(req);
+    const taskId = getId(req, 'taskId');
+    const task = await db.get<StoredTask>('tasks', taskId);
+    if (!task || task.projectId !== id) throw new NotFound('任务不存在');
+    return listTaskEvents(db, taskId);
   });
   app.post('/api/tasks/:id/cancel', async (req) => runner.cancel(getId(req)));
   app.post('/api/projects/:id/versions', async (req) => {

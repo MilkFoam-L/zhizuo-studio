@@ -975,6 +975,8 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
                         </Tag>
                       </div>
                       <p>{t.prompt || '根据已确认的商品简报生成'}</p>
+                      {t.needsAttention && <Tag tone="red">需人工核对供应商结果与费用</Tag>}
+                      <TaskTimeline projectId={id} task={t} />
                       {t.error && <div className="task-error">{t.error}</div>}
                       {t.upstreamTaskId && ['running', 'reconciling'].includes(t.status) && (
                         <div className="task-reconciliation">
@@ -1823,5 +1825,59 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
         </Modal>
       )}
     </div>
+  );
+}
+
+const taskEventLabels: Record<string, string> = {
+  queued: '已入队',
+  claimed: '已被领取执行',
+  checkpoint: '提交前检查点',
+  published: '已发布结果',
+  failed: '执行失败',
+  cancelled: '已取消',
+  reconcile: '结果未知，进入核对',
+  dead: '自动查询已停止，需人工核对',
+  requeued: '租约过期，未提交故重新排队',
+  unavailable: '工作空间不可执行，已取消',
+};
+interface TaskEventRow {
+  id: string;
+  kind: string;
+  at: string;
+  detail?: string;
+}
+function TaskTimeline({ projectId, task }: { projectId: string; task: GenerationTask }) {
+  const [events, setEvents] = useState<TaskEventRow[]>();
+  const [error, setError] = useState('');
+  const settled = !['queued', 'running'].includes(task.status);
+  if (!settled && !task.needsAttention) return null;
+  return (
+    <details
+      className="task-timeline"
+      onToggle={(e) => {
+        const target = e.currentTarget;
+        if (!target.open || events || error) return;
+        api<TaskEventRow[]>(`/projects/${projectId}/tasks/${task.id}/events`)
+          .then(setEvents)
+          .catch((err) => setError(message(err)));
+      }}
+    >
+      <summary>处理记录</summary>
+      {error ? (
+        <ErrorBox>{error}</ErrorBox>
+      ) : events ? (
+        <ol>
+          {events.map((event) => (
+            <li key={event.id}>
+              <span>{taskEventLabels[event.kind] ?? event.kind}</span>
+              <small>{formatTime(event.at)}</small>
+              {event.detail && <p>{event.detail}</p>}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <Spinner label="正在载入处理记录" />
+      )}
+    </details>
   );
 }

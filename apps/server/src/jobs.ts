@@ -36,6 +36,42 @@ export interface StoredTask extends GenerationTask {
   submissionStartedAt?: string;
   submissionStarted?: boolean;
 }
+
+/** Bounded, sanitized lifecycle record. Never contains prompts, keys or payloads. */
+export type TaskEventKind =
+  | 'queued'
+  | 'claimed'
+  | 'checkpoint'
+  | 'published'
+  | 'failed'
+  | 'cancelled'
+  | 'reconcile'
+  | 'dead'
+  | 'requeued'
+  | 'unavailable';
+export interface TaskEvent {
+  id: string;
+  taskId: string;
+  projectId: string;
+  kind: TaskEventKind;
+  at: string;
+  workerId?: string;
+  detail?: string;
+}
+export function taskEventKindLabel(kind: TaskEventKind): string {
+  return {
+    queued: '已入队',
+    claimed: '已被领取执行',
+    checkpoint: '提交前检查点',
+    published: '已发布结果',
+    failed: '执行失败',
+    cancelled: '已取消',
+    reconcile: '结果未知，进入核对',
+    dead: '自动查询已停止，需人工核对',
+    requeued: '租约过期，未提交故重新排队',
+    unavailable: '工作空间不可执行，已取消',
+  }[kind];
+}
 export function publicTask(t: StoredTask): GenerationTask {
   const {
     brief,
@@ -52,7 +88,45 @@ export function publicTask(t: StoredTask): GenerationTask {
     submissionStarted,
     ...rest
   } = t;
-  return rest;
+  return { ...rest, needsAttention: t.recoveryStopped === true };
+}
+
+/** Appends one bounded lifecycle event; failures never block the task itself. */
+export async function recordTaskEvent(
+  db: Database,
+  input: {
+    taskId: string;
+    projectId: string;
+    kind: TaskEventKind;
+    workerId?: string;
+    detail?: string;
+  },
+) {
+  const event: TaskEvent = { id: randomUUID(), at: now(), ...input };
+  try {
+    await db.put('task_events', event.id, event);
+    console.log(
+      JSON.stringify({
+        channel: 'task_event',
+        taskId: input.taskId,
+        projectId: input.projectId,
+        kind: input.kind,
+        at: event.at,
+        ...(input.workerId ? { workerId: input.workerId } : {}),
+      }),
+    );
+  } catch {
+    // Event persistence is best-effort telemetry, never task state.
+  }
+}
+
+export async function listTaskEvents(db: Database, taskId: string): Promise<TaskEvent[]> {
+  const rows = await db.query<{ body: TaskEvent }>(
+    "SELECT body FROM documents WHERE scope='task_events' AND body->>'taskId'=$1 ORDER BY body->>'at' ASC, id ASC",
+    [taskId],
+  );
+  // Keep the timeline bounded even for long-recovering tasks.
+  return rows.slice(-100).map((row) => row.body);
 }
 export function publicProvider(p: StoredProvider) {
   const { secret, workspaceId, ...rest } = p;
@@ -143,6 +217,12 @@ export class JobRunner {
         JSON.stringify({ status: 'cancelled', recoveryStopped: true, error, updatedAt: now() }),
       ],
     );
+    await recordTaskEvent(this.db, {
+      taskId: t.id,
+      projectId: t.projectId,
+      kind: 'unavailable',
+      workerId: this.workerId,
+    });
   }
 
   private async locked<T>(
@@ -179,15 +259,21 @@ export class JobRunner {
   private async expireLeases() {
     // A new-format record explicitly proves no paid submission began. Clear its
     // old fencing token before returning it to the queue; legacy records stay uncertain.
-    await this.db.query(
+    const requeued = await this.db.query<{ body: StoredTask }>(
       `UPDATE documents SET body=(body - 'workerId' - 'leaseToken' - 'leaseExpiresAt' - 'error') || $1::jsonb
        WHERE scope='tasks' AND body->>'status'='running'
          AND body->>'submissionStarted'='false'
          AND body->>'submissionStartedAt' IS NULL AND body->>'upstreamTaskId' IS NULL
          AND (body->>'leaseExpiresAt' IS NULL OR
-           (body->>'leaseExpiresAt')::timestamptz <= clock_timestamp())`,
+           (body->>'leaseExpiresAt')::timestamptz <= clock_timestamp()) RETURNING body`,
       [JSON.stringify({ status: 'queued', updatedAt: now() })],
     );
+    for (const { body } of requeued)
+      await recordTaskEvent(this.db, {
+        taskId: body.id,
+        projectId: body.projectId,
+        kind: 'requeued',
+      });
     const expired = await this.db.query<{ body: StoredTask }>(
       `UPDATE documents SET body=body || $1::jsonb
        WHERE scope='tasks' AND body->>'status'='running'
@@ -202,7 +288,15 @@ export class JobRunner {
         }),
       ],
     );
-    for (const { body } of expired) await this.settled(body.id);
+    for (const { body } of expired) {
+      await recordTaskEvent(this.db, {
+        taskId: body.id,
+        projectId: body.projectId,
+        kind: 'reconcile',
+        detail: '执行进程中断，提交结果未知',
+      });
+      await this.settled(body.id);
+    }
   }
 
   private async settled(id: string) {
@@ -292,6 +386,13 @@ export class JobRunner {
             error: '任务曾准备提交且结果未知，请核对供应商记录后再创建新任务。',
             updatedAt: now(),
           });
+          await recordTaskEvent(this.db, {
+            taskId: current.id,
+            projectId: current.projectId,
+            kind: 'reconcile',
+            workerId: this.workerId,
+            detail: '发现提交前检查点，提交结果未知',
+          });
           return;
         }
         const patch = {
@@ -320,6 +421,12 @@ export class JobRunner {
         await this.settled(t.id);
         continue;
       }
+      await recordTaskEvent(this.db, {
+        taskId: claimed.task.id,
+        projectId: claimed.task.projectId,
+        kind: 'claimed',
+        workerId: this.workerId,
+      });
       if (this.stopping) {
         await this.releaseUnsent(claimed.task, claimed.previous);
         continue;
@@ -368,7 +475,15 @@ export class JobRunner {
         [id, JSON.stringify(patch)],
       );
       this.active.get(id)?.abort();
-      return publicTask((await this.db.get<StoredTask>('tasks', id))!);
+      const final = (await this.db.get<StoredTask>('tasks', id))!;
+      if (final.status === 'cancelled' && t.status !== 'cancelled')
+        await recordTaskEvent(this.db, {
+          taskId: id,
+          projectId: final.projectId,
+          kind: 'cancelled',
+          detail: final.error,
+        });
+      return publicTask(final);
     });
     await this.settled(id);
     return result;
@@ -395,6 +510,12 @@ export class JobRunner {
           ...renewed,
           submissionStarted: true,
           submissionStartedAt: now(),
+        });
+        await recordTaskEvent(this.db, {
+          taskId: t.id,
+          projectId: t.projectId,
+          kind: 'checkpoint',
+          workerId: this.workerId,
         });
       }
       return true;
@@ -544,6 +665,13 @@ export class JobRunner {
           ],
         );
         if (!completed.length) throw new LeaseLost('发布前执行租约已失效');
+        await recordTaskEvent(this.db, {
+          taskId: t.id,
+          projectId: t.projectId,
+          kind: 'published',
+          workerId: this.workerId,
+          detail: `结果版本 ${version.id}`,
+        });
         return true;
       });
       if (!published) throw new LeaseLost('任务已取消或执行租约已失效');
@@ -596,6 +724,13 @@ export class JobRunner {
           uncertain && current.upstreamTaskId && !nextRecoveryAt
             ? ' 自动查询已停止，请在供应商后台核对原任务结果与费用。'
             : '';
+        const finalKind: TaskEventKind = cancelled
+          ? 'cancelled'
+          : uncertain && !nextRecoveryAt
+            ? 'dead'
+            : uncertain
+              ? 'reconcile'
+              : 'failed';
         await this.db.query(
           `UPDATE documents SET body=(body - 'nextRecoveryAt') || $2::jsonb ||
              jsonb_build_object('leaseExpiresAt', clock_timestamp())
@@ -612,6 +747,13 @@ export class JobRunner {
             t.leaseToken,
           ],
         );
+        await recordTaskEvent(this.db, {
+          taskId: t.id,
+          projectId: t.projectId,
+          kind: finalKind,
+          workerId: this.workerId,
+          detail: (message + limit).slice(0, 300),
+        });
       });
     } finally {
       clearTimeout(timeout);

@@ -169,6 +169,8 @@ export interface GenerationTask {
   resultVersionId?: string;
   createdAt: string;
   updatedAt: string;
+  /** 自动恢复已停止、需人工核对供应商结果与费用。 */
+  needsAttention?: boolean;
 }
 export interface ProjectDetail {
   project: Project;
