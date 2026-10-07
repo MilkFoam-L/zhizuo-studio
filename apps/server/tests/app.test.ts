@@ -487,7 +487,14 @@ test('backup converts tasks to historical snapshots; restore remaps groups, logo
       method: 'PATCH',
       url: `/api/projects/${project.id}`,
       headers,
-      payload: { revision: detail.project.revision, brief: { ...brief, logoAssetId: asset.id } },
+      payload: {
+        revision: detail.project.revision,
+        brief: {
+          ...brief,
+          logoAssetId: asset.id,
+          brandKitId: '0f0e0d0c-0b0a-4918-8765-fedcba987654',
+        },
+      },
     });
     assert.equal(r.statusCode, 200, r.body);
     r = await s.app.inject({

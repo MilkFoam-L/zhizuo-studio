@@ -242,8 +242,9 @@ export async function restore(repo: Repository, media: Media, zip: Buffer, works
           target: nodeMap.get(e.target)!,
         })),
     };
+    const { brandKitId: _kit, brandKitRevision: _kitRev, ...restBrief } = input.project.brief;
     const brief = {
-      ...input.project.brief,
+      ...restBrief,
       ...(input.project.brief.logoAssetId
         ? { logoAssetId: assetMap.get(input.project.brief.logoAssetId) }
         : {}),
