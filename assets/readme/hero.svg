@@ -1,60 +1,80 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="hero-title hero-desc">
-  <title id="hero-title">织作 ZhiZuo Studio</title>
-  <desc id="hero-desc">面向中文电商与内容创作者的 AI 内容工作台：一张画布承载商品事实、素材、图文草稿与海报版本。左侧为项目名与说明，右侧为画布节点编排示意。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="hero-title hero-desc" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif">
+  <title id="hero-title">织作 ZhiZuo Studio · AI 内容工作台</title>
+  <desc id="hero-desc">面向中文电商与内容创作者。一张画布连接商品事实、图文草稿、可编辑海报、版本对比与导出，让品牌内容有据可依。支持品牌资料库、团队协作与自托管。</desc>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#1f3d33"/>
+    <linearGradient id="hero-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#1f3d33"/>
       <stop offset="1" stop-color="#244b3c"/>
     </linearGradient>
-    <linearGradient id="poster" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f7efe0"/>
-      <stop offset="1" stop-color="#efdfc6"/>
+    <linearGradient id="hero-paper" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#f4e6d6"/>
+      <stop offset="1" stop-color="#e5d5b9"/>
     </linearGradient>
+    <pattern id="hero-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#d8c9a6" opacity=".16"/>
+    </pattern>
+    <clipPath id="hero-clip"><rect width="1200" height="360" rx="24"/></clipPath>
   </defs>
-  <rect width="1200" height="360" rx="26" fill="url(#bg)"/>
-  <g id="title-block" transform="translate(64 52)">
-    <text font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="21" fill="#d8c9a6" letter-spacing="6">ZHIZUO CREATIVE STUDIO</text>
-    <text y="86" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="72" font-weight="700" fill="#f4e6d6">织作 <tspan fill="#cfe0d2" font-size="40" font-weight="500">ZhiZuo Studio</tspan></text>
-    <text y="146" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="27" fill="#e8dfcd">面向中文电商与内容创作者的 AI 内容工作台</text>
-    <text y="188" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="22" fill="#b8c9ba">商品事实 → 图文草稿 → 可编辑海报 → 版本对比 → 导出发布素材</text>
-    <g id="meta" transform="translate(0 228)" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="19" fill="#9db3a0">
-      <text x="0">画布编排</text>
-      <text x="118">·</text>
-      <text x="140">多服务商 AI 接入</text>
-      <text x="330">·</text>
-      <text x="352">品牌资料库</text>
-      <text x="518">·</text>
-      <text x="540">团队协作</text>
-      <text x="690">·</text>
-      <text x="712">任务额度</text>
-    </g>
+  <g clip-path="url(#hero-clip)">
+    <rect width="1200" height="360" fill="url(#hero-bg)"/>
+    <rect x="682" y="24" width="494" height="312" fill="url(#hero-grid)"/>
+    <path d="M656 0C610 92 736 129 694 218S667 319 720 360M672 0C626 92 752 129 710 218S683 319 736 360" fill="none" stroke="#d8c9a6" stroke-opacity=".08"/>
+    <rect x=".5" y=".5" width="1199" height="359" rx="23.5" fill="none" stroke="#d8c9a6" stroke-opacity=".2"/>
   </g>
-  <g id="canvas-proof" transform="translate(790 46)" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif">
-    <!-- 连线 -->
-    <path d="M 60 74 C 110 74 120 128 170 128" stroke="#6f8a77" stroke-width="2.5" fill="none"/>
-    <path d="M 262 128 C 310 128 316 66 366 66" stroke="#6f8a77" stroke-width="2.5" fill="none" stroke-dasharray="6 5"/>
-    <path d="M 170 156 C 220 156 226 214 272 214" stroke="#6f8a77" stroke-width="2.5" fill="none"/>
-    <!-- brief 节点 -->
-    <rect x="6" y="46" width="112" height="56" rx="12" fill="#2e5443" stroke="#7fa087" stroke-width="1.5"/>
-    <text x="62" y="80" text-anchor="middle" font-size="20" fill="#e8dfcd">商品事实</text>
-    <!-- poster 节点（主视觉） -->
-    <rect x="366" y="10" width="96" height="112" rx="10" fill="url(#poster)" stroke="#d8c9a6" stroke-width="2"/>
-    <rect x="380" y="26" width="52" height="9" rx="4" fill="#244b3c"/>
-    <rect x="380" y="44" width="68" height="13" rx="4" fill="#202721"/>
-    <rect x="380" y="66" width="60" height="8" rx="4" fill="#8a8474"/>
-    <rect x="380" y="98" width="30" height="10" rx="3" fill="#b4552d"/>
-    <text x="414" y="142" text-anchor="middle" font-size="18" fill="#d8c9a6">可编辑海报</text>
-    <!-- asset 节点 -->
-    <rect x="170" y="100" width="92" height="56" rx="12" fill="#2e5443" stroke="#7fa087" stroke-width="1.5"/>
-    <rect x="184" y="112" width="26" height="32" rx="6" fill="#d8c9a6"/>
-    <text x="226" y="134" font-size="18" fill="#e8dfcd">素材</text>
-    <!-- copy 节点 -->
-    <rect x="272" y="188" width="120" height="52" rx="12" fill="#2e5443" stroke="#7fa087" stroke-width="1.5"/>
-    <text x="332" y="220" text-anchor="middle" font-size="18" fill="#e8dfcd">图文草稿</text>
-    <!-- 版本分支 -->
-    <circle cx="150" cy="252" r="8" fill="#f4e6d6"/>
-    <circle cx="206" cy="252" r="8" fill="none" stroke="#d8c9a6" stroke-width="2.5"/>
-    <path d="M 158 252 L 196 252" stroke="#d8c9a6" stroke-width="2.5"/>
-    <text x="228" y="258" font-size="18" fill="#b8c9ba">版本对比 · 导出</text>
+  <g fill="none" stroke="#d8c9a6" stroke-width="3" stroke-linecap="square">
+    <path d="M57 61H81V85H57ZM65 55V91M73 55V91"/>
+    <path d="M53 69H85" stroke="#e3986d"/>
+    <path d="M53 77H85"/>
+  </g>
+  <text x="104" y="80" font-size="20" letter-spacing="3.2" fill="#d8c9a6">ZHIZUO CREATIVE STUDIO</text>
+  <text x="52" y="176" font-size="82" font-weight="700" letter-spacing="2" fill="#f4e6d6">织作</text>
+  <text x="245" y="169" font-size="38" font-weight="500" fill="#f4e6d6">ZhiZuo Studio</text>
+  <text x="56" y="226" font-size="28" font-weight="500" fill="#f4e6d6">一张画布，织就品牌内容。</text>
+  <text x="56" y="262" font-size="20" fill="#d8c9a6">面向中文电商与内容创作者的 AI 内容工作台</text>
+  <circle cx="61" cy="297" r="5" fill="#e3986d"/>
+  <text x="80" y="304" font-size="20" fill="#d8c9a6">品牌资料库 · 团队协作 · 自托管</text>
+  <g id="canvas-proof">
+    <g fill="none" stroke="#a8b89a" stroke-width="2">
+      <path d="M790 138V181"/>
+      <path d="M870 209H895Q918 209 918 186V166Q918 148 940 148H948"/>
+      <path d="M948 242H899Q883 242 883 258V281Q883 297 899 297H934" stroke-dasharray="4 5"/>
+    </g>
+    <circle cx="790" cy="158" r="4" fill="#d8c9a6"/>
+    <rect x="714" y="80" width="156" height="58" rx="12" fill="#2e5443" stroke="#7d977e"/>
+    <g fill="none" stroke="#d8c9a6" stroke-width="1.8" stroke-linecap="round">
+      <rect x="730" y="98" width="17" height="21" rx="3"/>
+      <path d="M735 104H742M735 110H742"/>
+    </g>
+    <text x="759" y="117" font-size="20" fill="#f4e6d6">商品事实</text>
+    <rect x="714" y="181" width="156" height="58" rx="12" fill="#2e5443" stroke="#7d977e"/>
+    <g fill="none" stroke="#d8c9a6" stroke-width="1.8" stroke-linecap="round">
+      <path d="M730 200H747M730 207H742M730 214H746"/>
+    </g>
+    <text x="759" y="217" font-size="20" fill="#f4e6d6">图文草稿</text>
+    <circle cx="870" cy="209" r="3.5" fill="#d8c9a6"/>
+    <circle cx="944" cy="148" r="3.5" fill="#d8c9a6"/>
+    <rect x="955" y="54" width="192" height="213" rx="12" fill="#d8c9a6" opacity=".35"/>
+    <rect x="948" y="61" width="192" height="213" rx="12" fill="url(#hero-paper)"/>
+    <path d="M948 101H1140" stroke="#c8b899"/>
+    <text x="963" y="89" font-size="20" font-weight="600" fill="#244b3c">可编辑海报</text>
+    <circle cx="1121" cy="81" r="3" fill="#b4552d"/>
+    <path d="M971 215C980 173 1063 191 1116 126M989 217C1012 191 1074 219 1123 174" fill="none" stroke="#c8b899" stroke-width="1.5"/>
+    <ellipse cx="1044" cy="213" rx="49" ry="9" fill="#244b3c" opacity=".09"/>
+    <path d="M1048 162C1065 154 1065 135 1084 127M1062 150C1075 148 1085 137 1088 125C1074 128 1065 136 1062 150M1063 148C1051 144 1046 132 1048 121C1060 128 1066 136 1063 148" fill="#73876a"/>
+    <rect x="1016" y="135" width="42" height="79" rx="12" fill="#244b3c"/>
+    <rect x="1024" y="124" width="26" height="17" rx="4" fill="#b4552d"/>
+    <rect x="1021" y="159" width="32" height="31" rx="2" fill="#f4e6d6"/>
+    <path d="M1028 168H1046M1028 175H1041M1028 182H1037" stroke="#244b3c" stroke-width="2"/>
+    <rect x="987" y="113" width="116" height="113" rx="2" fill="none" stroke="#b4552d" stroke-opacity=".65" stroke-dasharray="3 4"/>
+    <g fill="#f4e6d6" stroke="#b4552d">
+      <rect x="984" y="110" width="6" height="6"/>
+      <rect x="1100" y="110" width="6" height="6"/>
+      <rect x="984" y="223" width="6" height="6"/>
+      <rect x="1100" y="223" width="6" height="6"/>
+    </g>
+    <text x="1044" y="255" text-anchor="middle" font-size="20" font-weight="600" fill="#244b3c">自然，自有章法</text>
+    <circle cx="899" cy="297" r="5" fill="#d8c9a6"/>
+    <circle cx="932" cy="297" r="5" fill="#244b3c" stroke="#d8c9a6" stroke-width="2"/>
+    <text x="952" y="304" font-size="20" fill="#d8c9a6">版本对比 → 导出</text>
   </g>
 </svg>

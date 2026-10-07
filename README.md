@@ -141,3 +141,37 @@ npm run start:worker
 「用量与额度」显示按工作空间统计的每日任务额度、预占、消耗和待核对记录，日期使用 Asia/Shanghai。新任务与预占记录在同一事务提交，失败一起回滚。结果未知时保留额度；管理员或本地工作台操作者可写明依据并核对。额度用量越过 80% / 100% 时会写入一次性告警事件；每个用户的任务提交另有滑动窗口限流（`USER_TASK_RATE_PER_MINUTE`，默认每分钟 20 次，超限返回 429）。额度是任务次数，实际供应商费用仍以其账单为准；此功能没有接入收付款。生成任务会记录处理事件（入队、领取、提交检查点、发布、核对、死信等），可在任务面板展开「处理记录」查看时间线；自动查询停止的任务会标示"需人工核对"。
 
 详见 [WORKERS.md](docs/WORKERS.md)、[QUOTAS.md](docs/QUOTAS.md)。连接真实 PostgreSQL 的独立验证命令为 `npm run test:postgres`，要求 `POSTGRES_TEST_URL` 指向 **127.0.0.1** 上名为 `zhizuo_validation` 的专用空闲测试实例，测试会创建/删除自己随机命名的数据库，不接受生产或远端数据库地址。
+
+### 参与开发
+
+欢迎 Issue 与 PR。动手之前：
+
+```sh
+git clone https://github.com/MilkFoam-L/zhizuo-studio.git
+cd zhizuo-studio
+npm ci
+cp .env.example .env
+npm run dev
+```
+
+- 工程门禁：`npm run check`（typecheck + 全量测试 + build），提交前请通过；格式用 `npm run format`
+- 提交信息遵循 Conventional Commits（`feat:` / `fix:` / `docs:` …），一个提交只做一件事
+- 测试：`npm test`；PostgreSQL 集成为 `npm run test:postgres`（要求本地隔离实例，见 [QUOTAS.md](docs/QUOTAS.md)）
+- 新能力请同步更新 [docs/TASKS.md](docs/TASKS.md) 的验收记录——本项目坚持"不把模拟测试说成真实供应商验证"的诚实边界
+
+### 交流与反馈
+
+- Bug 与功能建议：[GitHub Issues](https://github.com/MilkFoam-L/zhizuo-studio/issues)
+- 使用问题请附上运行方式（本地 / Docker）、`/api/health` 返回与复现步骤；**不要**在 Issue 中粘贴 API Key、访问密码或 `.env` 内容
+
+### 赞助支持
+
+项目处于开发阶段，暂未开通赞助渠道。如果织作对你有帮助，Star、Issue 和 PR 就是最直接的支持；商业定制与合作意向可透过 Issues 联系。
+
+### 开源协议
+
+本项目的发布许可证待所有者确定，在明确之前仓库内容保留所有权利、仅供学习参考。第三方组件许可：React Flow（MIT）、shadcn/ui 与 Radix（MIT，见 `apps/web/src/components/ui/LICENSE.shadcn.md`）、Noto Sans/Serif SC（SIL OFL，见 `apps/server/fonts/`）。
+
+### Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=MilkFoam-L/zhizuo-studio&type=Date)](https://star-history.com/#MilkFoam-L/zhizuo-studio&Date)

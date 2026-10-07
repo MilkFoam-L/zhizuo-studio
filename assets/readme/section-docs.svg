@@ -1,9 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="110" viewBox="0 0 1200 110" role="img" aria-labelledby="s-docs">
-  <title id="s-docs">文档索引</title>
-  <desc id="s-docs-d">文档索引：设计与工程全量记录</desc>
-  <rect width="1200" height="110" rx="18" fill="#f4e6d6"/>
-  <rect x="0" y="0" width="10" height="110" rx="5" fill="#244b3c"/>
-  <text x="52" y="46" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="16" fill="#8a7a58" letter-spacing="5">DOCUMENTATION</text>
-  <text x="52" y="88" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="42" font-weight="700" fill="#244b3c">文档索引</text>
-  <text x="1148" y="66" text-anchor="end" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif" font-size="20" fill="#a08f68">设计与工程全量记录</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="110" viewBox="0 0 1200 110" role="img" aria-labelledby="docs-title docs-desc" font-family="'PingFang SC','Hiragino Sans GB','Noto Sans SC',sans-serif">
+  <title id="docs-title">文档索引</title>
+  <desc id="docs-desc">DOCUMENTATION · 设计与工程全量记录。编织线条连接翻开的书页，延续织作的暖白与深绿品牌语言。</desc>
+  <defs><clipPath id="docs-clip"><rect width="1200" height="110" rx="16"/></clipPath></defs>
+  <g clip-path="url(#docs-clip)">
+    <rect width="1200" height="110" fill="#f4e6d6"/>
+    <rect width="10" height="110" fill="#244b3c"/>
+    <path d="M372 55H470C498 55 498 39 526 39H646M372 63H470C498 63 498 79 526 79H646" fill="none" stroke="#d8c9a6" stroke-width="1.5"/>
+    <path d="M527 55H680" fill="none" stroke="#d8c9a6" stroke-width="1.5"/>
+    <path d="M498 55H532" stroke="#b4552d" stroke-width="2"/>
+  </g>
+  <rect x=".5" y=".5" width="1199" height="109" rx="15.5" fill="none" stroke="#d8c9a6" stroke-opacity=".6"/>
+  <text x="52" y="73" font-size="44" font-weight="700" letter-spacing="1" fill="#244b3c">文档索引</text>
+  <circle cx="707" cy="55" r="22" fill="none" stroke="#d8c9a6"/>
+  <path d="M707 46C703 43 698 43 694 45V64C698 62 703 62 707 65C711 62 716 62 720 64V45C716 43 711 43 707 46ZM707 46V65" fill="none" stroke="#244b3c" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M698 50H703M711 50H716M698 55H703M711 55H716" stroke="#b4552d" stroke-width="1.5"/>
+  <text x="1148" y="39" text-anchor="end" font-size="16" font-weight="600" letter-spacing="3.5" fill="#755b3f">DOCUMENTATION</text>
+  <text x="1148" y="78" text-anchor="end" font-size="20" fill="#244b3c">设计与工程全量记录</text>
 </svg>

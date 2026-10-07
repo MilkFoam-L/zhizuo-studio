@@ -16,7 +16,7 @@ export interface QuotaEvent {
   workspaceId: string;
   period: string;
   taskId?: string;
-  action: 'reserve' | 'consume' | 'release' | 'review' | 'set_limit';
+  action: 'reserve' | 'consume' | 'release' | 'review' | 'set_limit' | 'notice';
   previousState?: QuotaState;
   state?: QuotaState;
   previousLimit?: number;
