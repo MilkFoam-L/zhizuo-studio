@@ -144,6 +144,32 @@ test('connection probe is a non-billable model-list GET and pins resolved IP', a
   assert.deepEqual(client.calls[0].address, { address: '1.1.1.1', family: 4 });
 });
 
+test('listModels returns sorted unique ids for OpenAI and de-prefixed Gemini catalogs', async () => {
+  const openai = harness([
+    ok({ data: [{ id: 'b-model' }, { id: 'a-model' }, { id: 'b-model' }, { name: 'ignored' }] }),
+  ]);
+  assert.deepEqual(await openai.listModels(config, 'private-key'), {
+    models: ['a-model', 'b-model'],
+  });
+  assert.equal(openai.calls[0].url.href, 'https://api.example.com/v1/models');
+  assert.equal(openai.calls[0].method, 'GET');
+
+  const gemini = harness([
+    ok({ models: [{ name: 'models/gemini-2' }, { name: 'models/gemini-1' }] }),
+  ]);
+  const geminiConfig = { ...config, kind: 'gemini' as const };
+  assert.deepEqual(await gemini.listModels(geminiConfig, 'private-key'), {
+    models: ['gemini-1', 'gemini-2'],
+  });
+
+  const asyncClient = harness([]);
+  await assert.rejects(
+    asyncClient.listModels({ ...config, kind: 'async-json', asyncMapping: mapping }, 'key'),
+    /手动填写模型名/,
+  );
+  assert.equal(asyncClient.calls.length, 0);
+});
+
 test('async protocol explicitly cannot claim connectivity without a standard probe', async () => {
   const client = harness([]);
   const result = await client.testConnection(

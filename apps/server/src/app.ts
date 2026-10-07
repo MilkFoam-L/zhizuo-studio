@@ -21,7 +21,13 @@ import {
   type StoredProvider,
   type StoredTask,
 } from './jobs';
-import { validateProviderInput, encryptSecret, decryptSecret, testConnection } from './providers';
+import {
+  validateProviderInput,
+  encryptSecret,
+  decryptSecret,
+  testConnection,
+  listModels,
+} from './providers';
 import { boardSchema, briefSchema, copySchema, posterSchema } from './validation';
 import { backup, restore } from './backup';
 import { BrandService, brandInputSchema } from './brands';
@@ -597,6 +603,11 @@ export async function createApp(options: AppOptions) {
       decryptSecret(p.secret, key!),
       AbortSignal.timeout(15_000),
     );
+  });
+  // 读取服务商模型目录供配置时选择；密钥仅用于本次请求，不落库。
+  app.post('/api/providers/models', async (req) => {
+    const b = z.object({ input: z.unknown(), apiKey: z.string().min(1).max(4096) }).parse(req.body);
+    return listModels(validateProviderInput(b.input), b.apiKey, AbortSignal.timeout(15_000));
   });
   const brandUpdateSchema = brandInputSchema.extend({ revision: z.number().int().positive() });
   app.get('/api/brands', async (req) => {

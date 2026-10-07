@@ -78,9 +78,45 @@ export function Providers({ notify }: { notify: Notify }) {
         : { ...EMPTY, asyncMapping: { ...MAPPING } },
     );
     setFormError('');
+    setProviderModels([]);
   }
   function field<K extends keyof ProviderInput>(key: K, value: ProviderInput[K]) {
     setForm((p) => ({ ...p, [key]: value }));
+  }
+  const [providerModels, setProviderModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  async function fetchModels() {
+    if (loadingModels || !form.apiKey?.trim()) return;
+    setLoadingModels(true);
+    setFormError('');
+    try {
+      const { input, apiKey } = {
+        input: {
+          name: form.name.trim() || '模型目录',
+          kind: form.kind,
+          baseUrl: form.baseUrl.trim().replace(/\/$/, ''),
+          textModel: '',
+          imageModel: '',
+          timeoutSeconds: form.timeoutSeconds,
+          ...(form.kind === 'async-json' ? { asyncMapping: form.asyncMapping } : {}),
+        },
+        apiKey: form.apiKey ?? '',
+      };
+      const result = await api<{ models: string[] }>(
+        '/providers/models',
+        json('POST', { input, apiKey }),
+      );
+      setProviderModels(result.models);
+      notify(
+        result.models.length ? `已获取 ${result.models.length} 个模型` : '服务商未返回模型',
+        'error',
+      );
+    } catch (e) {
+      setProviderModels([]);
+      setFormError(message(e));
+    } finally {
+      setLoadingModels(false);
+    }
   }
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -368,6 +404,7 @@ export function Providers({ notify }: { notify: Notify }) {
                 文本模型 ID
                 <Input
                   disabled={form.kind === 'async-json'}
+                  list="provider-model-options"
                   placeholder={
                     form.kind === 'async-json' ? '此协议只支持图片任务' : '服务商的文本模型 ID'
                   }
@@ -378,12 +415,40 @@ export function Providers({ notify }: { notify: Notify }) {
               <Label>
                 图片模型 ID
                 <Input
+                  list="provider-model-options"
                   placeholder="服务商的图片模型 ID"
                   value={form.imageModel}
                   onChange={(e) => field('imageModel', e.target.value)}
                 />
               </Label>
             </div>
+            <datalist id="provider-model-options">
+              {providerModels.map((model) => (
+                <option value={model} key={model} />
+              ))}
+            </datalist>
+            <Button
+              type="button"
+              variant="outline"
+              className="text-button"
+              disabled={
+                loadingModels ||
+                !form.baseUrl.trim() ||
+                !form.apiKey?.trim() ||
+                form.kind === 'async-json'
+              }
+              title={
+                form.kind === 'async-json'
+                  ? '异步协议没有标准模型列表'
+                  : form.apiKey?.trim()
+                    ? '从服务商读取模型目录'
+                    : '请先填写 API Key'
+              }
+              onClick={fetchModels}
+            >
+              {loadingModels ? <Spinner label="正在获取" /> : <Zap size={14} />}
+              获取模型列表
+            </Button>
             <Label>
               请求超时（秒）
               <Input

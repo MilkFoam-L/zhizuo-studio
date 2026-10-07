@@ -596,6 +596,30 @@ export function createProviderClient(options: ProviderTransportOptions = {}) {
     return signal ? AbortSignal.any([signal, timeout]) : timeout;
   }
 
+  async function listModels(
+    input: ProviderInput,
+    key: string,
+    signal?: AbortSignal,
+  ): Promise<{ models: string[] }> {
+    const config = validateProviderInput(input);
+    if (config.kind === 'async-json')
+      throw new ProviderError('异步 JSON 协议没有标准模型列表，请按中转站文档手动填写模型名');
+    const response = object(
+      await json(config, key, 'models', undefined, signalFor(config, signal), 1024 * 1024),
+    );
+    const raw = response[config.kind === 'gemini' ? 'models' : 'data'];
+    if (!Array.isArray(raw))
+      throw new ProviderError('该地址未返回标准模型列表，请检查协议和基础路径');
+    const models = raw
+      .map((entry) => {
+        if (config.kind === 'gemini')
+          return typeof entry?.name === 'string' ? entry.name.replace(/^models\//, '') : '';
+        return typeof entry?.id === 'string' ? entry.id : '';
+      })
+      .filter(Boolean);
+    return { models: [...new Set(models)].sort().slice(0, 200) };
+  }
+
   async function testConnection(
     input: ProviderInput,
     key: string,
@@ -905,11 +929,11 @@ export function createProviderClient(options: ProviderTransportOptions = {}) {
     }
   }
 
-  return { testConnection, generateCopy, generateImage, resumeImage };
+  return { testConnection, listModels, generateCopy, generateImage, resumeImage };
 }
-
 const client = createProviderClient();
 export const testConnection = client.testConnection;
+export const listModels = client.listModels;
 export const generateCopy = client.generateCopy;
 export const generateImage = client.generateImage;
 export const resumeImage = client.resumeImage;
