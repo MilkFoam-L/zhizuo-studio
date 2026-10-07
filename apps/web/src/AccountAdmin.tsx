@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, CirclePause, Plus, RefreshCw, ShieldCheck, UsersRound } from 'lucide-react';
-import { api, json, message, type AccountUser } from './api';
+import {
+  Check,
+  CirclePause,
+  KeyRound,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Trash2,
+  UsersRound,
+} from 'lucide-react';
+import { api, download, json, message, type AccountUser } from './api';
 import { AlertDialogAction, AlertDialogCancel } from './components/ui/alert-dialog';
 import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
@@ -33,6 +42,10 @@ export function AccountAdmin({
   const [disabling, setDisabling] = useState<AccountUser | null>(null);
   const [statusError, setStatusError] = useState('');
   const [changingAccount, setChangingAccount] = useState('');
+  const [resetting, setResetting] = useState<AccountUser | null>(null);
+  const [deleting, setDeleting] = useState<AccountUser | null>(null);
+  const [deleteError, setDeleteError] = useState('');
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const requestController = useRef<AbortController | null>(null);
   const passwordInput = useRef<HTMLInputElement>(null);
   const refresh = useCallback(() => {
@@ -111,6 +124,61 @@ export function AccountAdmin({
   }
   const enabled = accounts.filter((account) => !account.disabled).length;
   const busy = creatingAccount || !!changingAccount;
+
+  async function exportAccount(account: AccountUser) {
+    setLifecycleBusy(true);
+    try {
+      await download(
+        `/admin/accounts/${encodeURIComponent(account.id)}/export`,
+        `zhizuo-account-${account.id}.zip`,
+      );
+      notify('账号数据已导出为 ZIP');
+    } catch (e) {
+      notify(message(e), 'error');
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
+  async function submitReset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!resetting || lifecycleBusy) return;
+    const value = String(new FormData(event.currentTarget).get('newPassword') || '');
+    setLifecycleBusy(true);
+    try {
+      await api(
+        `/admin/accounts/${encodeURIComponent(resetting.id)}/reset-password`,
+        json('POST', { newPassword: value }),
+      );
+      setResetting(null);
+      notify(`已重置 ${resetting.displayName} 的密码，其全部登录状态已失效`);
+    } catch (e) {
+      notify(message(e), 'error');
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
+  async function submitDelete(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!deleting || lifecycleBusy) return;
+    const operatorPassword = String(
+      new FormData(event.currentTarget).get('operatorPassword') || '',
+    );
+    setLifecycleBusy(true);
+    setDeleteError('');
+    try {
+      const summary = await api<{ projects: number }>(
+        `/admin/accounts/${encodeURIComponent(deleting.id)}`,
+        json('DELETE', { password: operatorPassword }),
+      );
+      setAccounts((current) => current.filter((item) => item.id !== deleting.id));
+      setDeleting(null);
+      notify(`已删除账号及其 ${summary.projects} 个项目，额度审计记录已保留`);
+    } catch (e) {
+      setDeleteError(message(e));
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
 
   return (
     <div className="page-container account-admin-page">
@@ -242,6 +310,37 @@ export function AccountAdmin({
                     </TableCell>
                     <TableCell className="account-action-column">
                       <Button
+                        variant="ghost"
+                        className="text-button"
+                        disabled={busy || lifecycleBusy}
+                        aria-label={`重置 ${account.displayName} 的密码`}
+                        onClick={() => setResetting(account)}
+                      >
+                        <KeyRound size={14} />
+                        重置密码
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="text-button"
+                        disabled={lifecycleBusy}
+                        onClick={() => exportAccount(account)}
+                      >
+                        导出数据
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="text-button danger-text"
+                        disabled={lifecycleBusy}
+                        aria-label={`删除 ${account.displayName}`}
+                        onClick={() => {
+                          setDeleteError('');
+                          setDeleting(account);
+                        }}
+                      >
+                        <Trash2 size={14} />
+                        删除
+                      </Button>
+                      <Button
                         variant="outline"
                         className="button secondary"
                         disabled={self || busy}
@@ -367,6 +466,81 @@ export function AccountAdmin({
             </AlertDialogAction>
           </div>
         </ConfirmModal>
+      )}
+      {resetting && (
+        <Modal
+          title={`重置 ${resetting.displayName} 的密码`}
+          description="设置一次性临时密码并通过可信渠道告知本人；其全部登录状态将立即失效。"
+          onClose={() => {
+            if (!lifecycleBusy) setResetting(null);
+          }}
+        >
+          <form className="account-create-form" onSubmit={submitReset}>
+            <div className="account-form-field">
+              <Label htmlFor="reset-new-password">临时密码（至少 12 个字符）</Label>
+              <Input
+                id="reset-new-password"
+                name="newPassword"
+                type="text"
+                autoComplete="off"
+                required
+                minLength={12}
+                maxLength={256}
+                disabled={lifecycleBusy}
+              />
+            </div>
+            <div className="account-form-actions">
+              <Button
+                type="button"
+                className="button secondary"
+                disabled={lifecycleBusy}
+                onClick={() => setResetting(null)}
+              >
+                取消
+              </Button>
+              <Button type="submit" className="button primary" disabled={lifecycleBusy}>
+                {lifecycleBusy ? <Spinner label="正在重置" /> : '确认重置'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {deleting && (
+        <Modal
+          title={`删除 ${deleting.displayName} 的账号？`}
+          description="此操作不可恢复：项目、素材、版本、任务与模型配置将被永久删除。请先「导出数据」留存备份。额度审计记录将按合规要求保留。"
+          onClose={() => {
+            if (!lifecycleBusy) setDeleting(null);
+          }}
+        >
+          <form className="account-create-form" onSubmit={submitDelete}>
+            <div className="account-form-field">
+              <Label htmlFor="delete-operator-password">输入你的管理员密码以确认</Label>
+              <Input
+                id="delete-operator-password"
+                name="operatorPassword"
+                type="password"
+                autoComplete="current-password"
+                required
+                disabled={lifecycleBusy}
+              />
+            </div>
+            {deleteError && <ErrorBox>{deleteError}</ErrorBox>}
+            <div className="account-form-actions">
+              <Button
+                type="button"
+                className="button secondary"
+                disabled={lifecycleBusy}
+                onClick={() => setDeleting(null)}
+              >
+                取消
+              </Button>
+              <Button type="submit" className="button danger" disabled={lifecycleBusy}>
+                {lifecycleBusy ? <Spinner label="正在删除" /> : '永久删除账号'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
       )}
     </div>
   );

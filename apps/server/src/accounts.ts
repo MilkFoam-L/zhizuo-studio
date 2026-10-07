@@ -500,4 +500,55 @@ export class AccountService {
       );
     return { id: workspace.id, name: workspace.name, role: 'member' };
   }
+
+  /** Password check without side effects; used to confirm destructive operations. */
+  async verifyPassword(userId: string, password: string): Promise<boolean> {
+    z.string().uuid().parse(userId);
+    const [user] = await this.db.query<{ password_hash: string }>(
+      'SELECT password_hash FROM auth_users WHERE id=$1 AND NOT disabled',
+      [userId],
+    );
+    return matchesPassword(password, user?.password_hash ?? (await dummyPasswordHash()));
+  }
+
+  /** Self-service password change; every other session is revoked. */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    currentToken?: string,
+  ): Promise<void> {
+    z.string().uuid().parse(userId);
+    const next = passwordSchema.parse(newPassword);
+    await serialize(this.db, async () => {
+      const [user] = await this.db.query<{ id: string; password_hash: string; disabled: boolean }>(
+        'SELECT id, password_hash, disabled FROM auth_users WHERE id=$1 AND NOT disabled',
+        [userId],
+      );
+      if (!user) throw new AccountError('账号不存在', 404, 'ACCOUNT_NOT_FOUND');
+      if (!(await matchesPassword(currentPassword, user.password_hash)))
+        throw new AccountError('当前密码不正确', 401, 'INVALID_CREDENTIALS');
+      await this.db.query('UPDATE auth_users SET password_hash=$2 WHERE id=$1', [
+        userId,
+        await hashPassword(next),
+      ]);
+      await this.db.query('DELETE FROM auth_sessions WHERE user_id=$1', [userId]);
+      // Re-login flow issues a fresh session; the current token is invalidated too.
+      void currentToken;
+    });
+  }
+
+  /** Admin reset; every session of the target account is revoked. */
+  async resetPassword(userId: string, newPassword: string): Promise<void> {
+    z.string().uuid().parse(userId);
+    const next = passwordSchema.parse(newPassword);
+    await serialize(this.db, async () => {
+      const rows = await this.db.query<{ id: string }>(
+        'UPDATE auth_users SET password_hash=$2 WHERE id=$1 RETURNING id',
+        [userId, await hashPassword(next)],
+      );
+      if (!rows.length) throw new AccountError('账号不存在', 404, 'ACCOUNT_NOT_FOUND');
+      await this.db.query('DELETE FROM auth_sessions WHERE user_id=$1', [userId]);
+    });
+  }
 }

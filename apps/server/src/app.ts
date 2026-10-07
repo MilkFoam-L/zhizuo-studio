@@ -1,5 +1,5 @@
 import Fastify, { type FastifyRequest } from 'fastify';
-import { AccountService, type PublicAccount } from './accounts';
+import { AccountService, AccountError, type PublicAccount } from './accounts';
 import { createRuntime, type RuntimeOptions } from './runtime';
 import multipart from '@fastify/multipart';
 import cookie from '@fastify/cookie';
@@ -26,6 +26,7 @@ import { boardSchema, briefSchema, copySchema, posterSchema } from './validation
 import { backup, restore } from './backup';
 import { BrandService, brandInputSchema } from './brands';
 import { ShareService } from './shares';
+import { deleteAccountData, exportAccountData } from './lifecycle';
 
 export interface AppOptions extends RuntimeOptions {
   origin?: string;
@@ -305,6 +306,93 @@ export async function createApp(options: AppOptions) {
     }
     return user;
   };
+  const lastAdminAlive = async () =>
+    Number(
+      (
+        await db.query<{ count: string }>(
+          "SELECT count(*) AS count FROM auth_users WHERE role='admin' AND NOT disabled",
+        )
+      )[0]?.count ?? 0,
+    );
+  const accountPasswordSchema = z.object({
+    currentPassword: z.string().min(1).max(256),
+    newPassword: z.string().min(12).max(256),
+  });
+  app.post('/api/account/password', async (req) => {
+    const user = teamUser(req);
+    const b = accountPasswordSchema.parse(req.body);
+    await accounts!.changePassword(user.id, b.currentPassword, b.newPassword);
+    return { ok: true };
+  });
+  app.get('/api/account/export', async (req, reply) => {
+    const user = teamUser(req);
+    const exported = await exportAccountData(db, repo, media, user.workspace.id, {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+    });
+    return reply
+      .header('Content-Disposition', 'attachment; filename="zhizuo-account.zip"')
+      .type('application/zip')
+      .send(exported.buffer);
+  });
+  app.delete('/api/account', async (req, reply) => {
+    const user = teamUser(req);
+    const b = z.object({ password: z.string().min(1).max(256) }).parse(req.body);
+    if (!(await accounts!.verifyPassword(user.id, b.password)))
+      throw new AccountError('密码不正确', 401, 'INVALID_CREDENTIALS');
+    if (user.role === 'admin' && (await lastAdminAlive()) <= 1) {
+      const error = new Error('至少保留一个可用的管理员账号') as Error & { statusCode: number };
+      error.statusCode = 409;
+      throw error;
+    }
+    const summary = await deleteAccountData(db, media, user.id, user.workspace.id);
+    reply.clearCookie('zhizuo_session', { path: '/' });
+    reply.clearCookie('zhizuo_workspace', { path: '/' });
+    return { ok: true, ...summary };
+  });
+  app.get('/api/admin/accounts/:id/export', async (req, reply) => {
+    const target = await accounts!
+      .listAccounts()
+      .then((rows) => rows.find((u) => u.id === getId(req)));
+    if (!target) throw new NotFound('账号不存在');
+    const exported = await exportAccountData(db, repo, media, target.workspace.id, {
+      id: target.id,
+      email: target.email,
+      displayName: target.displayName,
+    });
+    return reply
+      .header('Content-Disposition', `attachment; filename="zhizuo-account-${target.id}.zip"`)
+      .type('application/zip')
+      .send(exported.buffer);
+  });
+  app.post('/api/admin/accounts/:id/reset-password', async (req) => {
+    await revalidateActor(req, true);
+    const b = z.object({ newPassword: z.string().min(12).max(256) }).parse(req.body);
+    await accounts!.resetPassword(getId(req), b.newPassword);
+    return { ok: true };
+  });
+  app.delete('/api/admin/accounts/:id', async (req) => {
+    const operator = teamUser(req);
+    const b = z.object({ password: z.string().min(1).max(256) }).parse(req.body);
+    await revalidateActor(req, true);
+    const target = await accounts!
+      .listAccounts()
+      .then((rows) => rows.find((u) => u.id === getId(req)));
+    if (!target) throw new NotFound('账号不存在');
+    // 删除他人账号需操作者密码确认；最后一位管理员不可删除。
+    if (!(await accounts!.verifyPassword(operator.id, b.password)))
+      throw new AccountError('操作者密码不正确', 401, 'INVALID_CREDENTIALS');
+    if (target.role === 'admin' && (await lastAdminAlive()) <= 1) {
+      const error = new Error('至少保留一个可用的管理员账号') as Error & { statusCode: number };
+      error.statusCode = 409;
+      throw error;
+    }
+    // Revoke sessions before removing data so nothing new can be created mid-deletion.
+    await accounts!.setDisabled(target.id, true);
+    const summary = await deleteAccountData(db, media, target.id, target.workspace.id);
+    return { ok: true, ...summary };
+  });
   if (accounts) {
     app.get('/api/workspaces', async (req) => accounts!.memberships(teamUser(req).id));
     app.post('/api/workspaces/switch', async (req, reply) => {

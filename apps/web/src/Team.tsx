@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Link2Off, UserPlus, UsersRound } from 'lucide-react';
+import { Check, KeyRound, Link2Off, Trash2, UserPlus, UsersRound } from 'lucide-react';
 import type { SessionInfo, WorkspaceMembership } from './api';
-import { api, json, message } from './api';
+import { api, download, json, message } from './api';
 import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
 import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
-import { ErrorBox, Spinner, formatTime, type Notify } from './ui';
+import { ConfirmModal, ErrorBox, Spinner, formatTime, type Notify } from './ui';
 import './accounts.css';
 import './team.css';
 
@@ -42,6 +42,10 @@ export function Team({
   const [busy, setBusy] = useState(false);
   const [joinToken, setJoinToken] = useState('');
   const [copied, setCopied] = useState('');
+  const [securityError, setSecurityError] = useState('');
+  const [securityBusy, setSecurityBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
   const workspaceId = session.activeWorkspaceId ?? '';
 
   const reload = useCallback(async () => {
@@ -142,6 +146,57 @@ export function Team({
       setBusy(false);
     }
   }
+
+  async function changePassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (securityBusy) return;
+    const fields = new FormData(event.currentTarget);
+    setSecurityBusy(true);
+    setSecurityError('');
+    try {
+      await api(
+        '/account/password',
+        json('POST', {
+          currentPassword: String(fields.get('currentPassword') || ''),
+          newPassword: String(fields.get('newPassword') || ''),
+        }),
+      );
+      notify('密码已更新，其他设备的登录状态已失效，请重新登录');
+      onSessionRefresh();
+    } catch (e) {
+      setSecurityError(message(e));
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+  async function exportData() {
+    if (securityBusy) return;
+    setSecurityBusy(true);
+    try {
+      await download('/account/export', 'zhizuo-account.zip');
+      notify('账号数据已导出为 ZIP');
+    } catch (e) {
+      setSecurityError(message(e));
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+  async function deleteAccount(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (securityBusy || !deleting) return;
+    setSecurityBusy(true);
+    setSecurityError('');
+    try {
+      await api('/account', json('DELETE', { password: deletePassword }));
+      setDeletePassword('');
+      window.location.hash = '/';
+      window.location.reload();
+    } catch (e) {
+      setSecurityError(message(e));
+      setSecurityBusy(false);
+    }
+  }
+  const isLastAdmin = session.user?.role === 'admin' && (session.workspaces?.length ?? 0) <= 1;
 
   if (!session.workspaces)
     return (
@@ -266,6 +321,102 @@ export function Team({
           </Button>
         </form>
       </Card>
+      <Card className="team-card">
+        <h2>
+          <KeyRound size={18} aria-hidden="true" />
+          账号与安全
+        </h2>
+        {securityError && <ErrorBox>{securityError}</ErrorBox>}
+        <form className="team-join" onSubmit={changePassword}>
+          <Label className="sr-only" htmlFor="current-password">
+            当前密码
+          </Label>
+          <Input
+            id="current-password"
+            name="currentPassword"
+            type="password"
+            autoComplete="current-password"
+            placeholder="当前密码"
+            required
+            disabled={securityBusy}
+          />
+          <Label className="sr-only" htmlFor="new-password">
+            新密码
+          </Label>
+          <Input
+            id="new-password"
+            name="newPassword"
+            type="password"
+            autoComplete="new-password"
+            placeholder="新密码（至少 12 位）"
+            required
+            minLength={12}
+            maxLength={256}
+            disabled={securityBusy}
+          />
+          <Button className="button primary" disabled={securityBusy}>
+            修改密码
+          </Button>
+        </form>
+        <div className="team-invite-row">
+          <Button variant="outline" disabled={securityBusy} onClick={exportData}>
+            导出我的全部数据
+          </Button>
+          <Button
+            variant="ghost"
+            className="text-button danger-text"
+            disabled={securityBusy || isLastAdmin}
+            title={isLastAdmin ? '至少保留一个管理员账号' : undefined}
+            onClick={() => {
+              setSecurityError('');
+              setDeletePassword('');
+              setDeleting(true);
+            }}
+          >
+            <Trash2 size={14} />
+            删除我的账号
+          </Button>
+        </div>
+        <p className="team-invite-row muted">
+          删除账号会永久清除项目、素材与任务，且不可恢复。额度审计记录按合规要求保留。
+        </p>
+      </Card>
+      {deleting && (
+        <ConfirmModal
+          title="永久删除我的账号？"
+          description="项目、素材、版本与任务将被永久删除，此操作不可恢复。建议先「导出我的全部数据」。"
+          onClose={() => {
+            if (!securityBusy) setDeleting(false);
+          }}
+        >
+          <form onSubmit={deleteAccount}>
+            <Label htmlFor="delete-confirm-password">输入当前密码确认</Label>
+            <Input
+              id="delete-confirm-password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={deletePassword}
+              onChange={(e) => setDeletePassword(e.target.value)}
+              disabled={securityBusy}
+            />
+            {securityError && <ErrorBox>{securityError}</ErrorBox>}
+            <div className="account-form-actions">
+              <Button
+                type="button"
+                className="button secondary"
+                disabled={securityBusy}
+                onClick={() => setDeleting(false)}
+              >
+                取消
+              </Button>
+              <Button type="submit" className="button danger" disabled={securityBusy}>
+                {securityBusy ? <Spinner label="正在删除" /> : '永久删除'}
+              </Button>
+            </div>
+          </form>
+        </ConfirmModal>
+      )}
     </div>
   );
 }
