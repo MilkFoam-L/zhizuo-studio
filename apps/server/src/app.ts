@@ -37,7 +37,11 @@ export async function createApp(options: AppOptions) {
   const brands = new BrandService(db, media, repo);
   const shares = new ShareService(db, media, key!, canRunProject);
   const identities = new WeakMap<FastifyRequest, PublicAccount>();
-  const workspace = (req: FastifyRequest) => identities.get(req)?.workspace.id ?? 'local';
+  const activeWorkspaces = new WeakMap<FastifyRequest, string>();
+  const workspace = (req: FastifyRequest) =>
+    (accounts ? activeWorkspaces.get(req) : undefined) ??
+    identities.get(req)?.workspace.id ??
+    'local';
   const ownedProject = async (req: FastifyRequest, id: string) => {
     const project = await repo.project(id);
     if ((project.workspaceId ?? 'local') !== workspace(req)) throw new NotFound('项目不存在');
@@ -144,7 +148,15 @@ export async function createApp(options: AppOptions) {
       reply.header('Cache-Control', 'no-store');
       if (accounts && req.cookies.zhizuo_session) {
         const user = await accounts.session(req.cookies.zhizuo_session);
-        if (user) identities.set(req, user);
+        if (user) {
+          identities.set(req, user);
+          // Active workspace switches only through a verified membership cookie.
+          const cookieWs = req.cookies.zhizuo_workspace;
+          if (cookieWs && cookieWs !== user.workspace.id) {
+            const role = await accounts.roleIn(user.id, cookieWs);
+            if (role) activeWorkspaces.set(req, cookieWs);
+          }
+        }
       }
       if (
         ![
@@ -203,7 +215,17 @@ export async function createApp(options: AppOptions) {
       : await isAuthenticated(req.cookies.zhizuo_session),
     requiresPassword: mode !== 'local',
     mode,
-    ...(identities.has(req) ? { user: identities.get(req) } : {}),
+    ...(identities.has(req)
+      ? {
+          user: identities.get(req),
+          ...(accounts
+            ? {
+                workspaces: await accounts.memberships(identities.get(req)!.id),
+                activeWorkspaceId: workspace(req),
+              }
+            : {}),
+        }
+      : {}),
   }));
   app.post('/api/session', async (req, reply) =>
     loginGate(req.ip, async () => {
@@ -248,7 +270,13 @@ export async function createApp(options: AppOptions) {
         authenticated: true,
         requiresPassword: mode !== 'local',
         mode,
-        ...(accountSession ? { user: accountSession.user } : {}),
+        ...(accountSession
+          ? {
+              user: accountSession.user,
+              workspaces: await accounts!.memberships(accountSession.user.id),
+              activeWorkspaceId: accountSession.user.workspace.id,
+            }
+          : {}),
       };
     }),
   );
@@ -258,8 +286,58 @@ export async function createApp(options: AppOptions) {
       else await db.remove('sessions', hash(req.cookies.zhizuo_session).toString('hex'));
     }
     reply.clearCookie('zhizuo_session', { path: '/' });
+    reply.clearCookie('zhizuo_workspace', { path: '/' });
     return { ok: true };
   });
+  const teamUser = (req: FastifyRequest) => {
+    const user = identities.get(req);
+    if (!user) {
+      const error = new Error('登录状态已失效，请重新登录') as Error & { statusCode: number };
+      error.statusCode = 401;
+      throw error;
+    }
+    return user;
+  };
+  if (accounts) {
+    app.get('/api/workspaces', async (req) => accounts!.memberships(teamUser(req).id));
+    app.post('/api/workspaces/switch', async (req, reply) => {
+      const user = teamUser(req);
+      const b = z.object({ workspaceId: z.string().uuid() }).parse(req.body);
+      const role = await accounts!.roleIn(user.id, b.workspaceId);
+      if (!role) throw new NotFound('工作空间不存在');
+      reply.setCookie('zhizuo_workspace', b.workspaceId, {
+        httpOnly: true,
+        secure: options.origin?.startsWith('https:'),
+        sameSite: 'strict',
+        path: '/',
+        maxAge: 7 * 86400,
+      });
+      return { activeWorkspaceId: b.workspaceId, role };
+    });
+    app.post('/api/invites/accept', async (req) => {
+      const user = teamUser(req);
+      const b = z.object({ token: z.string().max(64) }).parse(req.body);
+      return accounts!.acceptInvite(user.id, b.token);
+    });
+    app.get('/api/workspaces/:id/members', async (req) =>
+      accounts!.listMembers(getId(req), teamUser(req).id),
+    );
+    app.delete('/api/workspaces/:id/members/:userId', async (req) => {
+      await accounts!.removeMember(getId(req), teamUser(req).id, getId(req, 'userId'));
+      return { ok: true };
+    });
+    app.post('/api/workspaces/:id/invites', async (req) => {
+      const b = z.object({ expiresHours: z.number().int().min(1).max(168) }).parse(req.body);
+      return accounts!.createInvite(getId(req), teamUser(req).id, b.expiresHours);
+    });
+    app.get('/api/workspaces/:id/invites', async (req) =>
+      accounts!.listInvites(getId(req), teamUser(req).id),
+    );
+    app.post('/api/workspaces/:id/invites/:inviteId/revoke', async (req) => {
+      await accounts!.revokeInvite(getId(req), teamUser(req).id, getId(req, 'inviteId'));
+      return { ok: true };
+    });
+  }
   app.get('/api/admin/accounts', async () => accounts!.listAccounts());
   app.post('/api/admin/accounts', async (req) => {
     await revalidateActor(req, true);

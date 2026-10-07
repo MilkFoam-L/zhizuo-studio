@@ -12,6 +12,29 @@ export interface PublicAccount {
   createdAt: string;
 }
 
+export interface WorkspaceMembership {
+  id: string;
+  name: string;
+  role: 'owner' | 'member';
+}
+
+export interface WorkspaceMember {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: 'owner' | 'member';
+  joinedAt: string;
+}
+
+export interface InviteLink {
+  id: string;
+  workspaceId: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+  urlPath: string;
+}
+
 export class AccountError extends Error {
   constructor(
     message: string,
@@ -140,6 +163,17 @@ export class AccountService {
     await this.db.query(
       'CREATE INDEX IF NOT EXISTS auth_sessions_expiry ON auth_sessions(expires_at)',
     );
+    await this.db.query(`CREATE TABLE IF NOT EXISTS workspace_members (
+      workspace_id text NOT NULL REFERENCES auth_workspaces(id) ON DELETE CASCADE,
+      user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+      role text NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'member')),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (workspace_id, user_id)
+    )`);
+    await this.db.query(
+      'CREATE INDEX IF NOT EXISTS workspace_members_user ON workspace_members(user_id)',
+    );
+    await this.db.query('INSERT INTO migrations(version) VALUES(4) ON CONFLICT DO NOTHING');
     await dummyPasswordHash();
     if (bootstrap) {
       await serialize(this.db, async () => {
@@ -281,5 +315,189 @@ export class AccountService {
       if (!existing[0]) throw new AccountError('账号不存在', 404, 'ACCOUNT_NOT_FOUND');
       throw new AccountError('至少保留一个可用的管理员账号', 409, 'LAST_ADMIN');
     });
+  }
+
+  async memberships(userId: string): Promise<WorkspaceMembership[]> {
+    if (!/^[a-f0-9-]{36}$/i.test(userId)) return [];
+    const owned = await this.db.query<{ id: string; name: string }>(
+      `SELECT w.id, w.name FROM auth_workspaces w
+       JOIN auth_users u ON u.id = w.owner_id
+       WHERE w.owner_id = $1 AND NOT u.disabled`,
+      [userId],
+    );
+    const joined = await this.db.query<{ id: string; name: string }>(
+      `SELECT w.id, w.name FROM workspace_members m
+       JOIN auth_workspaces w ON w.id = m.workspace_id
+       JOIN auth_users o ON o.id = w.owner_id
+       JOIN auth_users u ON u.id = m.user_id
+       WHERE m.user_id = $1 AND NOT o.disabled AND NOT u.disabled`,
+      [userId],
+    );
+    return [
+      ...owned.map((row) => ({ id: row.id, name: row.name, role: 'owner' as const })),
+      ...joined.map((row) => ({ id: row.id, name: row.name, role: 'member' as const })),
+    ];
+  }
+
+  // Resolved per request; membership removal takes effect without touching sessions.
+  async roleIn(userId: string, workspaceId: string): Promise<'owner' | 'member' | undefined> {
+    if (!/^[a-f0-9-]{36}$/i.test(userId) || !/^[a-f0-9-]{36}$/i.test(workspaceId)) return undefined;
+    const [owned] = await this.db.query<{ id: string }>(
+      `SELECT w.id FROM auth_workspaces w
+       JOIN auth_users u ON u.id = w.owner_id
+       WHERE w.id = $2 AND w.owner_id = $1 AND NOT u.disabled`,
+      [userId, workspaceId],
+    );
+    if (owned) return 'owner';
+    const [joined] = await this.db.query<{ role: 'owner' | 'member' }>(
+      `SELECT m.role FROM workspace_members m
+       JOIN auth_workspaces w ON w.id = m.workspace_id
+       JOIN auth_users o ON o.id = w.owner_id
+       JOIN auth_users u ON u.id = m.user_id
+       WHERE m.workspace_id = $2 AND m.user_id = $1 AND NOT o.disabled AND NOT u.disabled`,
+      [userId, workspaceId],
+    );
+    return joined?.role;
+  }
+
+  async listMembers(workspaceId: string, requesterId: string): Promise<WorkspaceMember[]> {
+    z.string().uuid().parse(workspaceId);
+    if ((await this.roleIn(requesterId, workspaceId)) !== 'owner')
+      throw new AccountError('只有工作空间所有者可以查看成员', 403, 'LAST_ADMIN');
+    const rows = await this.db.query<{
+      user_id: string;
+      email: string;
+      display_name: string;
+      is_owner: boolean;
+      joined_at: Date | string;
+    }>(
+      `SELECT u.id AS user_id, u.email, u.display_name, (w.owner_id = u.id) AS is_owner,
+              COALESCE(m.created_at, u.created_at) AS joined_at
+       FROM auth_workspaces w
+       JOIN auth_users u ON u.id = w.owner_id
+          OR u.id IN (SELECT user_id FROM workspace_members WHERE workspace_id = w.id)
+       LEFT JOIN workspace_members m ON m.workspace_id = w.id AND m.user_id = u.id
+       WHERE w.id = $1 AND NOT u.disabled
+       ORDER BY (w.owner_id = u.id) DESC, joined_at, u.id`,
+      [workspaceId],
+    );
+    return rows.map((row) => ({
+      userId: row.user_id,
+      email: row.email,
+      displayName: row.display_name,
+      role: row.is_owner ? 'owner' : 'member',
+      joinedAt: new Date(row.joined_at).toISOString(),
+    }));
+  }
+
+  async removeMember(workspaceId: string, requesterId: string, userId: string): Promise<void> {
+    z.string().uuid().parse(workspaceId);
+    z.string().uuid().parse(userId);
+    if ((await this.roleIn(requesterId, workspaceId)) !== 'owner')
+      throw new AccountError('只有工作空间所有者可以移除成员', 403, 'LAST_ADMIN');
+    if (requesterId === userId) throw new AccountError('所有者不能移除自己', 409, 'LAST_ADMIN');
+    await this.db.query('DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [
+      workspaceId,
+      userId,
+    ]);
+  }
+
+  async createInvite(
+    workspaceId: string,
+    requesterId: string,
+    expiresHours: number,
+  ): Promise<InviteLink> {
+    z.string().uuid().parse(workspaceId);
+    const hours = z.number().int().min(1).max(168).parse(expiresHours);
+    if ((await this.roleIn(requesterId, workspaceId)) !== 'owner')
+      throw new AccountError('只有工作空间所有者可以创建邀请', 403, 'LAST_ADMIN');
+    const token = randomBytes(32).toString('base64url');
+    const id = randomUUID();
+    const now = new Date();
+    const invite = {
+      id,
+      workspaceId,
+      tokenHash: tokenHash(token),
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + hours * 3_600_000).toISOString(),
+    };
+    await this.db.put('invites', id, invite);
+    return { ...invite, urlPath: `/#/join/${token}` };
+  }
+
+  async listInvites(workspaceId: string, requesterId: string): Promise<InviteLink[]> {
+    z.string().uuid().parse(workspaceId);
+    if ((await this.roleIn(requesterId, workspaceId)) !== 'owner')
+      throw new AccountError('只有工作空间所有者可以查看邀请', 403, 'LAST_ADMIN');
+    const rows = await this.db.query<{
+      body: {
+        id: string;
+        workspaceId: string;
+        createdAt: string;
+        expiresAt: string;
+        revokedAt?: string;
+      };
+    }>(
+      "SELECT body FROM documents WHERE scope='invites' AND body->>'workspaceId'=$1 ORDER BY body->>'createdAt' DESC",
+      [workspaceId],
+    );
+    return rows.map((row) => ({
+      id: row.body.id,
+      workspaceId: row.body.workspaceId,
+      createdAt: row.body.createdAt,
+      expiresAt: row.body.expiresAt,
+      ...(row.body.revokedAt ? { revokedAt: row.body.revokedAt } : {}),
+      urlPath: '',
+    }));
+  }
+
+  async revokeInvite(workspaceId: string, requesterId: string, inviteId: string): Promise<void> {
+    z.string().uuid().parse(workspaceId);
+    z.string().uuid().parse(inviteId);
+    if ((await this.roleIn(requesterId, workspaceId)) !== 'owner')
+      throw new AccountError('只有工作空间所有者可以撤销邀请', 403, 'LAST_ADMIN');
+    const invite = await this.db.get<{ workspaceId: string; revokedAt?: string }>(
+      'invites',
+      inviteId,
+    );
+    if (!invite || invite.workspaceId !== workspaceId)
+      throw new AccountError('邀请不存在', 404, 'ACCOUNT_NOT_FOUND');
+    if (!invite.revokedAt)
+      await this.db.put('invites', inviteId, {
+        ...invite,
+        revokedAt: new Date().toISOString(),
+      });
+  }
+
+  async acceptInvite(userId: string, token: string): Promise<WorkspaceMembership> {
+    if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token))
+      throw new AccountError('邀请链接无效', 404, 'ACCOUNT_NOT_FOUND');
+    const [row] = await this.db.query<{
+      body: { workspaceId: string; expiresAt: string; revokedAt?: string };
+    }>("SELECT body FROM documents WHERE scope='invites' AND body->>'tokenHash'=$1", [
+      tokenHash(token),
+    ]);
+    const invite = row?.body;
+    if (!invite || invite.revokedAt || !(Date.parse(invite.expiresAt) > Date.now()))
+      throw new AccountError('邀请链接已失效', 404, 'ACCOUNT_NOT_FOUND');
+    const [workspace] = await this.db.query<{ id: string; name: string; owner_id: string }>(
+      `SELECT w.id, w.name, w.owner_id FROM auth_workspaces w
+       JOIN auth_users o ON o.id = w.owner_id
+       WHERE w.id = $1 AND NOT o.disabled`,
+      [invite.workspaceId],
+    );
+    if (!workspace) throw new AccountError('邀请链接已失效', 404, 'ACCOUNT_NOT_FOUND');
+    if (workspace.owner_id === userId)
+      return { id: workspace.id, name: workspace.name, role: 'owner' };
+    const [existing] = await this.db.query(
+      'SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2',
+      [workspace.id, userId],
+    );
+    if (!existing)
+      await this.db.query(
+        "INSERT INTO workspace_members(workspace_id, user_id, role) VALUES($1,$2,'member') ON CONFLICT DO NOTHING",
+        [workspace.id, userId],
+      );
+    return { id: workspace.id, name: workspace.name, role: 'member' };
   }
 }

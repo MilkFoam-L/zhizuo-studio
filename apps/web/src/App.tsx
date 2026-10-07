@@ -33,6 +33,7 @@ const AccountAdmin = lazy(() =>
 );
 const Usage = lazy(() => import('./Usage').then((module) => ({ default: module.Usage })));
 const Brands = lazy(() => import('./Brands').then((module) => ({ default: module.Brands })));
+const Team = lazy(() => import('./Team').then((module) => ({ default: module.Team })));
 const PublicShare = lazy(() =>
   import('./PublicShare').then((module) => ({ default: module.PublicShare })),
 );
@@ -49,6 +50,7 @@ export function App() {
   const [help, setHelp] = useState(false);
   const [toast, setToast] = useState<{ text: string; tone: string; id: number }>();
   const sessionRevision = useRef(0);
+  const sessionRefreshRef = useRef<() => void>(() => {});
   const notify = useCallback(
     (text: string, tone: 'success' | 'error' = 'success') =>
       setToast({ text, tone, id: Date.now() }),
@@ -87,6 +89,7 @@ export function App() {
         });
     };
     const expired = () => refresh(true);
+    sessionRefreshRef.current = () => refresh();
     refresh();
     window.addEventListener(SESSION_EXPIRED_EVENT, expired);
     return () => {
@@ -256,15 +259,17 @@ export function App() {
   const page =
     route === '/usage'
       ? 'usage'
-      : route === '/accounts'
-        ? 'accounts'
-        : route === '/settings'
-          ? 'settings'
-          : route === '/templates'
-            ? 'templates'
-            : route === '/brands'
-              ? 'brands'
-              : 'projects';
+      : route === '/team'
+        ? 'team'
+        : route === '/accounts'
+          ? 'accounts'
+          : route === '/settings'
+            ? 'settings'
+            : route === '/templates'
+              ? 'templates'
+              : route === '/brands'
+                ? 'brands'
+                : 'projects';
   return (
     <div className={`app-shell ${projectId ? 'in-editor' : ''}`}>
       <a
@@ -333,6 +338,18 @@ export function App() {
             <ChartNoAxesCombined size={19} />
             用量与额度
           </a>
+          {session.mode === 'accounts' && (
+            <a
+              className={page === 'team' ? 'active' : ''}
+              href="#/team"
+              aria-current={page === 'team' ? 'page' : undefined}
+              aria-label="团队协作"
+              title="团队协作"
+            >
+              <UsersRound size={19} />
+              团队协作
+            </a>
+          )}
           {canManageAccounts && (
             <a
               className={page === 'accounts' ? 'active' : ''}
@@ -414,6 +431,12 @@ export function App() {
             <Providers notify={notify} />
           ) : page === 'usage' ? (
             <Usage session={session} notify={notify} />
+          ) : page === 'team' ? (
+            <Team
+              session={session}
+              notify={notify}
+              onSessionRefresh={() => sessionRefreshRef.current()}
+            />
           ) : page === 'brands' ? (
             <Brands notify={notify} />
           ) : page === 'accounts' ? (

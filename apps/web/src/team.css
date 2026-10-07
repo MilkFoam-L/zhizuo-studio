@@ -1,0 +1,116 @@
+.team-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+}
+.team-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+}
+.team-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--foreground);
+  margin: 0;
+}
+.team-workspaces,
+.team-members,
+.team-invites {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.team-workspaces li,
+.team-members li,
+.team-invites li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: 14px;
+}
+.team-workspaces li:last-child,
+.team-members li:last-child,
+.team-invites li:last-child {
+  border-bottom: none;
+}
+.team-workspaces strong,
+.team-members strong {
+  display: block;
+  font-size: 14px;
+}
+.team-workspaces small,
+.team-members small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.team-current {
+  font-size: 12px;
+  color: #244b3c;
+  background: color-mix(in srgb, #244b3c 12%, transparent);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.team-member-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.team-member-side em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.team-invite-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-invite-row .muted {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+.team-invites span {
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.team-copied {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-style: normal;
+  font-size: 12px;
+  color: #244b3c;
+}
+.team-join {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.team-join input {
+  flex: 1;
+  min-width: 220px;
+}
+@media (max-width: 720px) {
+  .team-page {
+    padding: 16px 12px 40px;
+  }
+  .team-workspaces li,
+  .team-members li,
+  .team-invites li {
+    flex-wrap: wrap;
+  }
+}

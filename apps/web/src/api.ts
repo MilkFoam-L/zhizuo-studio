@@ -7,11 +7,18 @@ export type AccountUser = {
   workspace: { id: string; name: string };
   createdAt: string;
 };
+export type WorkspaceMembership = {
+  id: string;
+  name: string;
+  role: 'owner' | 'member';
+};
 export type SessionInfo = {
   authenticated: boolean;
   requiresPassword: boolean;
   mode?: 'local' | 'shared' | 'accounts';
   user?: AccountUser;
+  workspaces?: WorkspaceMembership[];
+  activeWorkspaceId?: string;
 };
 export const SESSION_EXPIRED_EVENT = 'zhizuo:session-expired';
 
