@@ -19,8 +19,23 @@
 ## 配置
 
 1. **助手模型**：「模型接入」为服务商填写"助手模型 ID"（需支持工具调用的对话模型；OpenAI 兼容与 Gemini 原生可用，异步中转不支持）。未配置时自动化入口会明确提示。
-2. **发布通道 (MCP)**：「模型接入 → 发布通道 (MCP)」添加端点（如 `http://127.0.0.1:18060/mcp`）与可选 Bearer token（AES-GCM 加密存储）。推荐部署 [xpzouying/xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp)（本机或 Docker），并在其登录工具中完成扫码登录。
-3. 「发布通道」页可一键检查登录状态与工具清单（调用 `check_login_status`）。
+2. **发布通道 (MCP)**：「模型接入 → 发布通道 (MCP)」添加端点与可选 Bearer token（AES-GCM 加密存储），并完成扫码登录。
+
+## 内置发布通道（Docker 部署）
+
+`compose.yaml` 已内置发布通道服务（**来源：[xpzouying/xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp)，已获作者授权内置**，其许可与使用条款见原仓库）：
+
+```sh
+docker compose up -d          # 同时启动 studio 与 xiaohongshu-mcp
+```
+
+- 内置通道端点：`http://xiaohongshu-mcp:18060/mcp`（compose 网络内），本机浏览器访问地址为 `http://127.0.0.1:18060`
+- 「模型接入 → 发布通道 (MCP) → 添加发布通道」提供了内置/本机端点预设，一键选用
+- 扫码登录：通道卡片点「扫码登录」，二维码在织作界面内展示，用小红书 App 扫描后点"我已扫码"；登录态（cookie）持久化在 Docker 卷 `zhizuo-studio_xhs-mcp-data`
+- 发布图片通过共享卷 `publish-staging` 在织作与 MCP 之间交接，无需公网暴露
+- 注意：镜像 `xpzouying/xiaohongshu-mcp` 需从 Docker Hub 拉取；受限网络环境可能需要配置镜像加速
+
+本地（非 Docker）开发：单独运行 MCP（`go run .` 或其登录工具），发布通道端点填 `http://127.0.0.1:18060/mcp`。
 
 ## 发布行为
 

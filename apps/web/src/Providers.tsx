@@ -24,6 +24,7 @@ import type {
   ProviderKind,
 } from '../../../packages/shared/src/index';
 import { api, json, message } from './api';
+import { McpChannel } from './McpChannel';
 import { ErrorBox, Modal, ConfirmModal, Spinner, Tag, type Notify } from './ui';
 const MAPPING: AsyncMapping = {
   submitPath: '/images/generations',
@@ -567,6 +568,7 @@ export function Providers({ notify }: { notify: Notify }) {
           </div>
         </ConfirmModal>
       )}
+      <McpChannel notify={notify} />
     </div>
   );
 }

@@ -24,6 +24,21 @@ services:
       WORKER_MODE: ${WORKER_MODE:-inline}
     volumes:
       - studio-data:/app/.data
+      # 自动化发布需要 MCP 与织作访问同一素材 staging 目录。
+      - publish-staging:/app/.data/publish-staging
+    restart: unless-stopped
+  # 内置小红书发布通道：基于 xpzouying/xiaohongshu-mcp（已获作者授权内置）。
+  # 首次使用需在织作「模型接入 → 发布通道」完成扫码登录；cookie 持久化在专用卷。
+  xiaohongshu-mcp:
+    image: xpzouying/xiaohongshu-mcp:latest
+    ports:
+      - "127.0.0.1:18060:18060"
+    volumes:
+      - xhs-mcp-data:/app/data
+      # 与 studio 共享发布 staging，MCP 直接读取本机图片路径。
+      - publish-staging:/app/.data/publish-staging
     restart: unless-stopped
 volumes:
   studio-data:
+  xhs-mcp-data:
+  publish-staging:

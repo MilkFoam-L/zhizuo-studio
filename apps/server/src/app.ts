@@ -33,7 +33,7 @@ import { backup, restore } from './backup';
 import { BrandService, brandInputSchema } from './brands';
 import { ShareService } from './shares';
 import { deleteAccountData, exportAccountData } from './lifecycle';
-import { mcpCheckLogin } from './mcp';
+import { mcpCheckLogin, mcpLoginQrcode } from './mcp';
 import { AssistantService, type AssistantOptions } from './assistant';
 
 export interface AppOptions extends RuntimeOptions {
@@ -732,6 +732,14 @@ export async function createApp(options: AppOptions) {
       raw: result.raw,
       tools: result.tools.map((tool) => tool.name),
     };
+  });
+  // 登录二维码透传：前端展示后轮询 check 接口直至登录成功。
+  app.post('/api/mcp-servers/:id/login-qrcode', async (req, reply) => {
+    const server = await ownedMcp(req, getId(req));
+    if (!server.enabled) return reply.code(409).send({ error: '发布通道已停用' });
+    const token = server.token ? decryptSecret(server.token, key!) : undefined;
+    const result = await mcpLoginQrcode({ endpoint: server.endpoint, token });
+    return result;
   });
   const assistantProvider = async (req: FastifyRequest, providerId: string) => {
     const provider = await ownedProvider(req, providerId);

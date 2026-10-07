@@ -1,0 +1,11 @@
+.mcp-qrcode {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.mcp-qrcode img {
+  border-radius: 12px;
+  border: 1px solid #e5e0d2;
+  background: #fff;
+}

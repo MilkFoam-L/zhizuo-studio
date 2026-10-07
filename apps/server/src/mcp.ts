@@ -234,3 +234,33 @@ export async function mcpPublishContent(
     await connection.close();
   }
 }
+
+/** 获取登录二维码（Base64），由前端展示后轮询登录状态。 */
+export async function mcpLoginQrcode(config: McpEndpointConfig): Promise<{
+  imageDataUrl?: string;
+  text: string;
+}> {
+  const connection = await connectMcp(config);
+  try {
+    const result = await connection.callTool('get_login_qrcode', {});
+    const blocks = Array.isArray(result)
+      ? result
+      : Array.isArray((result as Record<string, unknown>)?.content)
+        ? ((result as Record<string, unknown>).content as unknown[])
+        : [];
+    let text = '';
+    for (const item of blocks) {
+      const block = item as { type?: unknown; text?: unknown; data?: unknown; mimeType?: unknown };
+      if (block.type === 'image' && typeof block.data === 'string') {
+        const mime = typeof block.mimeType === 'string' ? block.mimeType : 'image/png';
+        return { imageDataUrl: `data:${mime};base64,${block.data}`, text };
+      }
+      if (block.type === 'text' && typeof block.text === 'string') text += block.text;
+    }
+    const base64 = /([A-Za-z0-9+/=]{200,})/.exec(text)?.[1];
+    if (base64) return { imageDataUrl: `data:image/png;base64,${base64}`, text };
+    return { text: text.slice(0, 300) };
+  } finally {
+    await connection.close();
+  }
+}

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createApp } from '../src/app';
-import { connectMcp, McpError, mcpCheckLogin, mcpPublishContent } from '../src/mcp';
+import { connectMcp, McpError, mcpCheckLogin, mcpLoginQrcode, mcpPublishContent } from '../src/mcp';
 
 const headers = { host: 'localhost:4317' };
 
@@ -64,6 +64,16 @@ function mcpStub(
           respond({ content: [{ type: 'text', text: '已登录：用户 小织' }] });
         else if (name === 'publish_content')
           respond({ content: [{ type: 'text', text: '发布成功' }] });
+        else if (name === 'get_login_qrcode')
+          respond({
+            content: [
+              {
+                type: 'image',
+                data: 'iVBORw0KGgoAAAANSUhEUg==',
+                mimeType: 'image/png',
+              },
+            ],
+          });
         else respond({ content: [{ type: 'text', text: '未知工具' }], isError: true });
         return;
       }
@@ -94,6 +104,9 @@ test('MCP client negotiates sessions, lists tools and publishes content', async 
   assert.match(login.raw, /已登录/);
   assert.ok(stub.calls.includes('initialize'));
   assert.ok(stub.calls.includes('notifications/initialized'));
+
+  const qrcode = await mcpLoginQrcode({ endpoint, token: 'stub-secret' });
+  assert.match(qrcode.imageDataUrl ?? '', /^data:image\/png;base64,/);
 
   const published = await mcpPublishContent(
     { endpoint, token: 'stub-secret' },
