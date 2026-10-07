@@ -44,6 +44,7 @@ import {
   Undo2,
   Upload,
   X,
+  Bot,
 } from 'lucide-react';
 import {
   PROMPT_LIBRARY,
@@ -64,6 +65,7 @@ import { createGroup, generationNodeState, removeNodes, withTaskNodes } from './
 import { BrandPicker } from './BrandPicker';
 import { ShareDialog } from './ShareDialog';
 import { CopyEditor, PosterEditor, VersionCompare } from './Editors';
+import { AutomationPanel } from './Automation';
 import {
   ErrorBox,
   Modal,
@@ -104,6 +106,7 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
     | 'reload'
     | 'storyboard'
     | 'share'
+    | 'automation'
     | null
   >(null);
   const [editingVersion, setEditingVersion] = useState<ContentVersion>();
@@ -671,6 +674,16 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
             hidden
             onChange={(e) => upload(e.target.files)}
           />
+          <Button
+            className="toolbar-button"
+            aria-label="自动化发布"
+            title="自动化：想法 → 生图 → 发布"
+            disabled={busy}
+            onClick={() => setModal('automation')}
+          >
+            <Bot size={16} />
+            <span>自动化</span>
+          </Button>
           <Button
             className="toolbar-button"
             aria-label="写文案"
@@ -1314,6 +1327,19 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
         </Button>
         <span>织作 · 每一版灵感都有来处</span>
       </footer>
+      {modal === 'automation' && (
+        <AutomationPanel
+          project={{ id }}
+          providers={providers}
+          detail={detail ?? undefined}
+          notify={notify}
+          onClose={() => {
+            setModal(null);
+            void model.refresh();
+          }}
+          onResultAdded={() => void model.refresh()}
+        />
+      )}
       {modal === 'share' && (
         <ShareDialog
           projectId={id}

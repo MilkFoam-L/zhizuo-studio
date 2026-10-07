@@ -15,6 +15,8 @@ export interface ProviderInput {
   apiKey?: string;
   textModel: string;
   imageModel: string;
+  /** 自动化编排用的对话式助手模型，需支持工具调用；仅 openai/gemini 协议可用。 */
+  assistantModel?: string;
   timeoutSeconds: number;
   asyncMapping?: AsyncMapping;
 }
@@ -248,6 +250,45 @@ export function initialBoard(): Board {
   };
 }
 export * from './prompt-library';
+/** 自动化发布流水线：想法 → 文案与图片 → 人工确认 → MCP 发布。 */
+export interface AutomationImageItem {
+  id: string;
+  prompt: string;
+  /** 对应生图任务 ID。 */
+  taskId?: string;
+  /** 生成结果的图片版本 ID。 */
+  versionId?: string;
+  attempts: number;
+  status: 'pending' | 'generating' | 'done' | 'failed';
+  feedback?: string;
+}
+export type AutomationRunStatus =
+  'reviewing' | 'generating' | 'ready' | 'publishing' | 'published' | 'failed' | 'cancelled';
+export interface AutomationRun {
+  id: string;
+  projectId: string;
+  providerId: string;
+  status: AutomationRunStatus;
+  idea: string;
+  imageCount: number;
+  draft: {
+    title: string;
+    content: string;
+    tags: string[];
+    images: AutomationImageItem[];
+  };
+  imageTaskIds: string[];
+  publish?: {
+    serverId: string;
+    serverName: string;
+    visibility: string;
+    response: string;
+    at: string;
+  };
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
 export function makePoster(templateId: string, brief: Brief, assetId?: string): Poster {
   const t = TEMPLATES.find((t) => t.id === templateId) ?? TEMPLATES[0];
   return {

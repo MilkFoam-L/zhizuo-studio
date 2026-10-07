@@ -16,7 +16,9 @@ export type Scope =
   | 'brand_kits'
   | 'shares'
   | 'invites'
-  | 'task_events';
+  | 'task_events'
+  | 'mcp_servers'
+  | 'automation_runs';
 export interface Database {
   query<T>(sql: string, params?: unknown[]): Promise<T[]>;
   transaction<T>(work: () => Promise<T>): Promise<T>;

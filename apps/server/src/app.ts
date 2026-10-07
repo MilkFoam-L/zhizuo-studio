@@ -33,11 +33,15 @@ import { backup, restore } from './backup';
 import { BrandService, brandInputSchema } from './brands';
 import { ShareService } from './shares';
 import { deleteAccountData, exportAccountData } from './lifecycle';
+import { mcpCheckLogin } from './mcp';
+import { AssistantService, type AssistantOptions } from './assistant';
 
 export interface AppOptions extends RuntimeOptions {
   origin?: string;
   worker?: boolean;
   staticRoot?: string;
+  /** 测试注入：替换自动化编排的助手模型调用。 */
+  assistantGenerateWithTools?: AssistantOptions['generateWithTools'];
 }
 const idSchema = z.string().uuid();
 const hash = (v: string) => createHash('sha256').update(v).digest();
@@ -50,6 +54,12 @@ export async function createApp(options: AppOptions) {
   const { db, repo, media, runner, accounts, quotas, mode, key, canRunProject } = runtime;
   const brands = new BrandService(db, media, repo);
   const shares = new ShareService(db, media, key!, canRunProject);
+  const assistant = new AssistantService(db, repo, media, quotas, key!, {
+    dataDir: options.dataDir,
+    ...(options.assistantGenerateWithTools
+      ? { generateWithTools: options.assistantGenerateWithTools }
+      : {}),
+  });
   const identities = new WeakMap<FastifyRequest, PublicAccount>();
   const activeWorkspaces = new WeakMap<FastifyRequest, string>();
   const workspace = (req: FastifyRequest) =>
@@ -642,6 +652,180 @@ export async function createApp(options: AppOptions) {
       .parse(req.body);
     return brands.apply(b.brandId, workspace(req), getId(req), b.revision);
   });
+  interface StoredMcpServer {
+    id: string;
+    workspaceId: string;
+    name: string;
+    endpoint: string;
+    token: string;
+    enabled: boolean;
+    createdAt: string;
+  }
+  const publicMcp = (server: StoredMcpServer) => {
+    const { token, ...rest } = server;
+    return { ...rest, hasToken: !!token };
+  };
+  const ownedMcp = async (req: FastifyRequest, id: string) => {
+    const server = await db.get<StoredMcpServer>('mcp_servers', id);
+    if (!server || (server.workspaceId ?? 'local') !== workspace(req))
+      throw new NotFound('发布通道不存在');
+    return server;
+  };
+  app.get('/api/mcp-servers', async (req) =>
+    (await db.list<StoredMcpServer>('mcp_servers'))
+      .filter((server) => (server.workspaceId ?? 'local') === workspace(req))
+      .map(publicMcp),
+  );
+  app.post('/api/mcp-servers', async (req) => {
+    const b = z
+      .object({
+        name: z.string().trim().min(1).max(80),
+        endpoint: z.string().url().max(2000),
+        token: z.string().max(4096).optional(),
+        enabled: z.boolean().optional(),
+      })
+      .parse(req.body);
+    const server: StoredMcpServer = {
+      id: randomUUID(),
+      workspaceId: workspace(req),
+      name: b.name,
+      endpoint: b.endpoint.replace(/\/+$/, ''),
+      token: b.token ? encryptSecret(b.token, key!) : '',
+      enabled: b.enabled ?? true,
+      createdAt: now(),
+    };
+    await db.put('mcp_servers', server.id, server);
+    return publicMcp(server);
+  });
+  app.put('/api/mcp-servers/:id', async (req) => {
+    const old = await ownedMcp(req, getId(req));
+    const b = z
+      .object({
+        name: z.string().trim().min(1).max(80),
+        endpoint: z.string().url().max(2000),
+        token: z.string().max(4096).optional(),
+        enabled: z.boolean().optional(),
+      })
+      .parse(req.body);
+    const next: StoredMcpServer = {
+      ...old,
+      name: b.name,
+      endpoint: b.endpoint.replace(/\/+$/, ''),
+      enabled: b.enabled ?? old.enabled,
+      token: b.token ? encryptSecret(b.token, key!) : old.token,
+    };
+    await db.put('mcp_servers', next.id, next);
+    return publicMcp(next);
+  });
+  app.delete('/api/mcp-servers/:id', async (req) => {
+    await ownedMcp(req, getId(req));
+    await db.remove('mcp_servers', getId(req));
+    return { ok: true };
+  });
+  app.post('/api/mcp-servers/:id/check', async (req, reply) => {
+    const server = await ownedMcp(req, getId(req));
+    if (!server.enabled) return reply.code(409).send({ error: '发布通道已停用' });
+    const token = server.token ? decryptSecret(server.token, key!) : undefined;
+    const result = await mcpCheckLogin({ endpoint: server.endpoint, token });
+    return {
+      loggedIn: result.loggedIn,
+      raw: result.raw,
+      tools: result.tools.map((tool) => tool.name),
+    };
+  });
+  const assistantProvider = async (req: FastifyRequest, providerId: string) => {
+    const provider = await ownedProvider(req, providerId);
+    if (!provider.assistantModel) throw new NotFound('该服务商未配置助手模型，无法启动自动化');
+    return {
+      id: provider.id,
+      name: provider.name,
+      kind: provider.kind,
+      baseUrl: provider.baseUrl,
+      textModel: provider.textModel,
+      imageModel: provider.imageModel,
+      assistantModel: provider.assistantModel,
+      timeoutSeconds: provider.timeoutSeconds,
+      secret: provider.secret,
+    };
+  };
+  app.post('/api/projects/:id/automation', async (req) =>
+    serializeTaskCreation(() =>
+      revalidateActor(req).then(async () => {
+        const id = getId(req);
+        const b = z
+          .object({
+            idea: z.string().trim().min(2).max(2000),
+            imageCount: z.number().int().min(1).max(4).default(1),
+            providerId: z.string().uuid(),
+          })
+          .parse(req.body);
+        const provider = await assistantProvider(req, b.providerId);
+        return assistant.startRun({
+          projectId: id,
+          workspaceId: workspace(req),
+          provider,
+          encryptionKey: key!,
+          idea: b.idea,
+          imageCount: b.imageCount,
+        });
+      }),
+    ),
+  );
+  app.get('/api/projects/:id/automation', async (req) => {
+    const id = getId(req);
+    await repo.project(id);
+    const runs = await db.query<{ id: string }>(
+      "SELECT id FROM documents WHERE scope='automation_runs' AND body->>'projectId'=$1 ORDER BY body->>'createdAt' DESC",
+      [id],
+    );
+    const result = [];
+    for (const row of runs) result.push(await assistant.refreshRun(row.id, workspace(req)));
+    return result;
+  });
+  app.get('/api/projects/:id/automation/:runId', async (req) => {
+    await repo.project(getId(req));
+    return assistant.refreshRun(getId(req, 'runId'), workspace(req));
+  });
+  app.post('/api/projects/:id/automation/:runId/regenerate', async (req) => {
+    const b = z
+      .object({
+        imageId: z.string().uuid(),
+        feedback: z.string().trim().max(500).optional(),
+        providerId: z.string().uuid(),
+      })
+      .parse(req.body);
+    const provider = await assistantProvider(req, b.providerId);
+    return assistant.regenerateImage(
+      getId(req, 'runId'),
+      workspace(req),
+      b.imageId,
+      provider,
+      key!,
+      b.feedback,
+    );
+  });
+  app.post('/api/projects/:id/automation/:runId/publish', async (req) => {
+    const b = z
+      .object({
+        mcpServerId: z.string().uuid(),
+        visibility: z.enum(['公开可见', '仅自己可见', '仅互关好友可见']).optional(),
+      })
+      .parse(req.body);
+    const server = await ownedMcp(req, b.mcpServerId);
+    if (!server.enabled) throw new NotFound('发布通道已停用');
+    return assistant.publish(getId(req, 'runId'), workspace(req), {
+      server: {
+        id: server.id,
+        name: server.name,
+        endpoint: server.endpoint,
+        token: server.token ? decryptSecret(server.token, key!) : undefined,
+      },
+      ...(b.visibility ? { visibility: b.visibility } : {}),
+    });
+  });
+  app.delete('/api/projects/:id/automation/:runId', async (req) =>
+    assistant.cancel(getId(req, 'runId'), workspace(req)),
+  );
   app.post('/api/projects/:id/assets', async (req) => {
     const id = getId(req);
     await repo.project(id);

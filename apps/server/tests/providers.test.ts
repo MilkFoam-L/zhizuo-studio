@@ -144,6 +144,75 @@ test('connection probe is a non-billable model-list GET and pins resolved IP', a
   assert.deepEqual(client.calls[0].address, { address: '1.1.1.1', family: 4 });
 });
 
+test('generateWithTools parses OpenAI tool calls and Gemini function calls', async () => {
+  const assistantConfig: ProviderInput = { ...config, assistantModel: 'assistant-test' };
+  const tools = [
+    { name: 'create_image_task', description: '创建图片任务', parameters: { type: 'object' } },
+  ];
+  const openai = harness([
+    ok({
+      choices: [
+        {
+          message: {
+            content: '',
+            tool_calls: [
+              {
+                id: 'call-1',
+                type: 'function',
+                function: { name: 'create_image_task', arguments: '{"count":1}' },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+  ]);
+  const turn = await openai.generateWithTools(
+    assistantConfig,
+    'private-key',
+    [{ role: 'user', content: '帮我出一张图' }],
+    tools,
+  );
+  assert.equal(turn.toolCalls.length, 1);
+  assert.equal(turn.toolCalls[0].name, 'create_image_task');
+  assert.deepEqual(turn.toolCalls[0].arguments, { count: 1 });
+  const payload = JSON.parse(openai.calls[0].body!.toString());
+  assert.equal(payload.model, 'assistant-test');
+  assert.equal(payload.tools[0].function.name, 'create_image_task');
+
+  const geminiConfig: ProviderInput = { ...assistantConfig, kind: 'gemini' };
+  const gemini = harness([
+    ok({
+      candidates: [{ content: { parts: [{ functionCall: { name: 'read_brief', args: {} } }] } }],
+    }),
+  ]);
+  const geminiTurn = await gemini.generateWithTools(
+    geminiConfig,
+    'private-key',
+    [{ role: 'user', content: '读取简报' }],
+    tools,
+  );
+  assert.equal(geminiTurn.toolCalls[0].name, 'read_brief');
+});
+
+test('generateWithTools requires an assistant model and rejects async-json', async () => {
+  const client = harness([]);
+  await assert.rejects(
+    client.generateWithTools(config, 'private-key', [{ role: 'user', content: 'x' }], []),
+    /未配置助手模型/,
+  );
+  await assert.rejects(
+    client.generateWithTools(
+      { ...config, kind: 'async-json', assistantModel: 'x', asyncMapping: mapping },
+      'private-key',
+      [{ role: 'user', content: 'x' }],
+      [],
+    ),
+    /不支持助手模型/,
+  );
+  assert.equal(client.calls.length, 0);
+});
+
 test('listModels returns sorted unique ids for OpenAI and de-prefixed Gemini catalogs', async () => {
   const openai = harness([
     ok({ data: [{ id: 'b-model' }, { id: 'a-model' }, { id: 'b-model' }, { name: 'ignored' }] }),

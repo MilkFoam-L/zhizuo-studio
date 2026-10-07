@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
 import { isIP } from 'node:net';
@@ -10,6 +10,31 @@ import type {
 } from '../../../packages/shared/src/index.ts';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/** 助手模型编排：工具声明与对话消息（协议无关的中间表示）。 */
+export interface AssistantTool {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+export interface AssistantToolCall {
+  id: string;
+  name: string;
+  arguments: unknown;
+}
+export interface AssistantMessage {
+  role: 'user' | 'assistant' | 'tool';
+  content?: string;
+  /** assistant 角色：模型请求的工具调用。 */
+  toolCalls?: AssistantToolCall[];
+  /** tool 角色：对应工具调用的执行结果。 */
+  toolCallId?: string;
+  toolName?: string;
+}
+export interface AssistantTurn {
+  content: string;
+  toolCalls: AssistantToolCall[];
+}
 const MAX_JSON_BYTES = 30 * 1024 * 1024;
 const MAX_POLLS = 60;
 const BLOCKED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
@@ -168,6 +193,7 @@ export function validateProviderInput(input: unknown): ProviderInput {
   const textModel = field(raw.textModel ?? '', '文本模型', 200, true);
   const imageModel = field(raw.imageModel ?? '', '图片模型', 200, true);
   if (!textModel && !imageModel) throw new ProviderError('至少填写一个模型名称');
+  const assistantModel = field(raw.assistantModel ?? '', '助手模型', 200, true);
   if (
     !Number.isInteger(raw.timeoutSeconds) ||
     Number(raw.timeoutSeconds) < 10 ||
@@ -183,9 +209,12 @@ export function validateProviderInput(input: unknown): ProviderInput {
     imageModel,
     timeoutSeconds: Number(raw.timeoutSeconds),
   };
+  if (assistantModel) config.assistantModel = assistantModel;
   if (raw.apiKey !== undefined) config.apiKey = field(raw.apiKey, 'API Key', 8192, true);
   if (config.kind === 'async-json') {
     if (!imageModel) throw new ProviderError('异步 JSON 接入需要图片模型');
+    if (assistantModel)
+      throw new ProviderError('异步 JSON 协议不支持助手模型，请改用 OpenAI 兼容或 Gemini');
     config.asyncMapping = validateMapping(raw.asyncMapping);
   }
   return config;
@@ -620,6 +649,166 @@ export function createProviderClient(options: ProviderTransportOptions = {}) {
     return { models: [...new Set(models)].sort().slice(0, 200) };
   }
 
+  /**
+   * 单轮工具调用补全：给定对话历史与工具声明，返回助手文本或工具调用请求。
+   * 多轮循环由编排器（assistant.ts）执行，便于限制轮数与审计每一步。
+   */
+  async function generateWithTools(
+    input: ProviderInput,
+    key: string,
+    messages: AssistantMessage[],
+    tools: AssistantTool[],
+    signal?: AbortSignal,
+  ): Promise<AssistantTurn> {
+    const config = validateProviderInput(input);
+    if (config.kind === 'async-json') throw new ProviderError('异步 JSON 协议不支持助手模型编排');
+    if (!config.assistantModel)
+      throw new ProviderError('该服务商未配置助手模型，无法执行自动化编排');
+    if (tools.length)
+      for (const tool of tools) {
+        if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tool.name))
+          throw new ProviderError('工具名称不符合模型接口要求');
+      }
+    const model = config.assistantModel;
+    const timeout = signalFor(config, signal);
+    if (config.kind === 'openai') {
+      const payloadMessages = messages.map((message) => {
+        if (message.role === 'assistant' && message.toolCalls?.length)
+          return {
+            role: 'assistant',
+            ...(message.content ? { content: message.content } : { content: null }),
+            tool_calls: message.toolCalls.map((call) => ({
+              id: call.id,
+              type: 'function',
+              function: { name: call.name, arguments: JSON.stringify(call.arguments ?? {}) },
+            })),
+          };
+        if (message.role === 'tool')
+          return { role: 'tool', tool_call_id: message.toolCallId, content: message.content ?? '' };
+        return { role: message.role, content: message.content ?? '' };
+      });
+      const data = object(
+        await json(
+          config,
+          key,
+          'chat/completions',
+          {
+            model,
+            messages: payloadMessages,
+            ...(tools.length
+              ? {
+                  tools: tools.map((tool) => ({
+                    type: 'function',
+                    function: {
+                      name: tool.name,
+                      description: tool.description,
+                      parameters: tool.parameters,
+                    },
+                  })),
+                }
+              : {}),
+          },
+          timeout,
+          4 * 1024 * 1024,
+        ),
+      );
+      const choices = Array.isArray(data.choices) ? data.choices : [];
+      const choice = object(choices[0] ?? {});
+      const message = object(choice.message ?? {});
+      const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      const toolCalls = rawCalls
+        .map((call) => {
+          const item = object(call);
+          const fn = object(item.function ?? {});
+          if (typeof fn.name !== 'string' || !fn.name) return undefined;
+          let args: unknown = {};
+          if (typeof fn.arguments === 'string') {
+            try {
+              args = JSON.parse(fn.arguments);
+            } catch {
+              args = {};
+            }
+          }
+          return { id: String(item.id ?? randomUUID()), name: fn.name, arguments: args };
+        })
+        .filter((call): call is AssistantToolCall => !!call);
+      return {
+        content: typeof message.content === 'string' ? message.content : '',
+        toolCalls,
+      };
+    }
+    // Gemini 原生 function calling。
+    const contents = messages.map((message) => {
+      if (message.role === 'assistant' && message.toolCalls?.length)
+        return {
+          role: 'model',
+          parts: message.toolCalls.map((call) => ({
+            functionCall: { name: call.name, args: (call.arguments ?? {}) as object },
+          })),
+        };
+      if (message.role === 'tool')
+        return {
+          role: 'user',
+          parts: [
+            {
+              functionResponse: {
+                name: message.toolName ?? 'tool',
+                response: { result: message.content ?? '' },
+              },
+            },
+          ],
+        };
+      return {
+        role: message.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: message.content ?? '' }],
+      };
+    });
+    const data = object(
+      await json(
+        config,
+        key,
+        `models/${encodeURIComponent(model.replace(/^models\//, ''))}:generateContent`,
+        {
+          contents,
+          ...(tools.length
+            ? {
+                tools: [
+                  {
+                    functionDeclarations: tools.map((tool) => ({
+                      name: tool.name,
+                      description: tool.description,
+                      parameters: tool.parameters,
+                    })),
+                  },
+                ],
+              }
+            : {}),
+        },
+        timeout,
+        4 * 1024 * 1024,
+      ),
+    );
+    const candidates = data.candidates;
+    const parts =
+      Array.isArray(candidates) && candidates[0]
+        ? pathValue(candidates[0], 'content.parts')
+        : undefined;
+    const turn: AssistantTurn = { content: '', toolCalls: [] };
+    if (Array.isArray(parts))
+      for (const part of parts) {
+        const item = object(part);
+        if (typeof item.text === 'string') turn.content += item.text;
+        const call = object(item.functionCall ?? {});
+        if (typeof call.name === 'string' && call.name)
+          turn.toolCalls.push({
+            id: randomUUID(),
+            name: call.name,
+            arguments: (call.args ?? {}) as unknown,
+          });
+      }
+    return turn;
+  }
+
   async function testConnection(
     input: ProviderInput,
     key: string,
@@ -929,11 +1118,19 @@ export function createProviderClient(options: ProviderTransportOptions = {}) {
     }
   }
 
-  return { testConnection, listModels, generateCopy, generateImage, resumeImage };
+  return {
+    testConnection,
+    listModels,
+    generateWithTools,
+    generateCopy,
+    generateImage,
+    resumeImage,
+  };
 }
 const client = createProviderClient();
 export const testConnection = client.testConnection;
 export const listModels = client.listModels;
+export const generateWithTools = client.generateWithTools;
 export const generateCopy = client.generateCopy;
 export const generateImage = client.generateImage;
 export const resumeImage = client.resumeImage;
