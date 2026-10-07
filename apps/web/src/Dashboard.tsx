@@ -7,12 +7,19 @@ import {
   ArrowDownToLine,
   ArrowRight,
   ArrowUpRight,
+  Check,
   Clock3,
   FolderOpen,
   Plus,
   Search,
 } from 'lucide-react';
-import { TEMPLATES, type Project, type ProjectDetail } from '../../../packages/shared/src/index';
+import {
+  PROMPT_LIBRARY,
+  PROMPT_LIBRARY_CATEGORIES,
+  TEMPLATES,
+  type Project,
+  type ProjectDetail,
+} from '../../../packages/shared/src/index';
 import { api, json, message } from './api';
 import { ErrorBox, Modal, Spinner, Tag, TemplateArt, formatTime, type Notify } from './ui';
 export function Dashboard({ templatesOnly, notify }: { templatesOnly: boolean; notify: Notify }) {
@@ -24,6 +31,9 @@ export function Dashboard({ templatesOnly, notify }: { templatesOnly: boolean; n
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
+  const [promptCategory, setPromptCategory] =
+    useState<(typeof PROMPT_LIBRARY_CATEGORIES)[number]>('小红书封面');
+  const [copiedPrompt, setCopiedPrompt] = useState('');
   const file = useRef<HTMLInputElement>(null);
   const refresh = () => {
     setLoading(true);
@@ -253,6 +263,70 @@ export function Dashboard({ templatesOnly, notify }: { templatesOnly: boolean; n
             </Button>
           ))}
         </div>
+      </section>
+      <section className="template-section">
+        <div className="section-heading">
+          <div>
+            <h2>提示词库</h2>
+            <span>AI 生图提示词模板 · 替换 [方括号] 变量后用于「AI 创作」的图片生成</span>
+          </div>
+        </div>
+        <div className="prompt-categories" role="tablist" aria-label="提示词分类">
+          {PROMPT_LIBRARY_CATEGORIES.map((category) => (
+            <Button
+              key={category}
+              className={`prompt-category ${promptCategory === category ? 'active' : ''}`}
+              aria-pressed={promptCategory === category}
+              onClick={() => setPromptCategory(category)}
+            >
+              {category}
+            </Button>
+          ))}
+        </div>
+        <div className="prompt-grid">
+          {PROMPT_LIBRARY.filter((entry) => entry.category === promptCategory).map((entry) => (
+            <Card key={entry.id} className="prompt-card">
+              <div className="prompt-card-heading">
+                <h3>{entry.title}</h3>
+                <span>{entry.scenario}</span>
+              </div>
+              <details>
+                <summary>查看提示词</summary>
+                <p className="prompt-text">{entry.prompt}</p>
+              </details>
+              <div className="prompt-card-footer">
+                <Button
+                  className="text-button"
+                  onClick={() => {
+                    navigator.clipboard
+                      ?.writeText(entry.prompt)
+                      .then(() => {
+                        setCopiedPrompt(entry.id);
+                        notify('提示词已复制，可在 AI 创作中粘贴使用');
+                        setTimeout(() => setCopiedPrompt(''), 2500);
+                      })
+                      .catch(() => notify('复制失败，请手动选择文本复制', 'error'));
+                  }}
+                >
+                  {copiedPrompt === entry.id ? '已复制' : '复制提示词'}
+                </Button>
+                <a
+                  className="prompt-source"
+                  href={entry.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title={`来源：${entry.source}`}
+                >
+                  来源
+                </a>
+              </div>
+            </Card>
+          ))}
+        </div>
+        <p className="hint prompt-license">
+          提示词精选自 CC BY 4.0 开源仓库 （gpt-img-2/ai-image-prompt-cookbook ·
+          ai-xiaohongshu-chuanda-prompt-cookbook），已按许可标注来源；生成图片请遵守目标平台规范。
+        </p>
       </section>
       <footer className="dashboard-footer">
         每个好想法，都值得被好好织作。<span>织作 ZhiZuo Studio</span>

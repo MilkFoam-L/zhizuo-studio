@@ -247,6 +247,7 @@ export function initialBoard(): Board {
     viewport: { x: 0, y: 0, zoom: 0.85 },
   };
 }
+export * from './prompt-library';
 export function makePoster(templateId: string, brief: Brief, assetId?: string): Poster {
   const t = TEMPLATES.find((t) => t.id === templateId) ?? TEMPLATES[0];
   return {

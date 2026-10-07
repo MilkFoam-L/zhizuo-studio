@@ -46,6 +46,8 @@ import {
   X,
 } from 'lucide-react';
 import {
+  PROMPT_LIBRARY,
+  PROMPT_LIBRARY_CATEGORIES,
   TEMPLATES,
   type BoardNode,
   type Brief,
@@ -1478,6 +1480,35 @@ export function ProjectEditor({ id, notify }: { id: string; notify: Notify }) {
                           ))}
                         </select>
                         <small>参考图支持取决于服务商的图片编辑能力。</small>
+                      </Label>
+                    )}
+                    {genKind === 'image' && (
+                      <Label>
+                        从提示词库选用
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const entry = PROMPT_LIBRARY.find((item) => item.id === e.target.value);
+                            if (entry) setGenPrompt(entry.prompt);
+                          }}
+                        >
+                          <option value="">选择一个提示词模板（可再编辑）</option>
+                          {PROMPT_LIBRARY_CATEGORIES.map((category) => (
+                            <optgroup key={category} label={category}>
+                              {PROMPT_LIBRARY.filter((entry) => entry.category === category).map(
+                                (entry) => (
+                                  <option key={entry.id} value={entry.id}>
+                                    {entry.title}
+                                  </option>
+                                ),
+                              )}
+                            </optgroup>
+                          ))}
+                        </select>
+                        <small>
+                          模板中的 [方括号] 是变量，选入后替换成你的商品与场景信息；精选自 CC BY 4.0
+                          开源提示词库。
+                        </small>
                       </Label>
                     )}
                     <Label>

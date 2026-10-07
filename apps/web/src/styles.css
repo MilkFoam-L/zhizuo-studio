@@ -5526,3 +5526,81 @@ a:focus-visible {
   font-size: 12px;
   color: var(--muted-foreground, #586157);
 }
+
+/* 提示词库 */
+.prompt-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.prompt-category {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #244b3c 30%, transparent);
+  color: #3b5b3d;
+  background: transparent;
+  font-size: 13px;
+}
+.prompt-category.active {
+  background: #244b3c;
+  border-color: #244b3c;
+  color: #f4e6d6;
+}
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+.prompt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+.prompt-card-heading h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 4px;
+  color: #202721;
+}
+.prompt-card-heading span {
+  font-size: 12px;
+  color: #7b877b;
+}
+.prompt-card details summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: #3b5b3d;
+  user-select: none;
+}
+.prompt-card .prompt-text {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #586157;
+  background: #faf6ec;
+  border-radius: 8px;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+.prompt-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+}
+.prompt-source {
+  font-size: 12px;
+  color: #a08f68;
+  text-decoration: none;
+}
+.prompt-source:hover {
+  text-decoration: underline;
+}
+.prompt-license {
+  margin-top: 14px;
+  font-size: 12px;
+  color: #7b877b;
+}
