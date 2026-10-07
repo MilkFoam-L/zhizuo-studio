@@ -187,6 +187,11 @@ export interface Template {
   color: string;
   category: string;
 }
+/**
+ * 内置排版预设版本（见 docs/PLATFORM-RULES.md）。这些尺寸是编辑设计预设，
+ * 不是任何平台的官方发布规范；修改模板尺寸或换行规则必须递增此版本。
+ */
+export const PLATFORM_PRESET_VERSION = 'preset-1';
 export const TEMPLATES: Template[] = [
   {
     id: 'xhs-editorial',
